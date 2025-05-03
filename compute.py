@@ -489,6 +489,18 @@ def get_stock_info_by_key(instrument_key, stock_info_dict):
 # Market Data Handling
 # ===============================================================
 
+import datetime
+import time
+import requests
+import json
+import pandas as pd
+import logging
+from upstox_client import ApiClient, LoginApi, MarketQuoteApi
+import config 
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+
 class UpstoxClient:
     def __init__(self):
         """Initialize Upstox client with API credentials"""
@@ -498,46 +510,38 @@ class UpstoxClient:
         self.code = config.UPSTOX_CODE
         self.access_token = None
         self.client = None
-        
+
     def authenticate(self):
         """Authenticate with Upstox API"""
         try:
-            # Initialize API client
             api_client = ApiClient()
             login_api = LoginApi(api_client)
-            
-            # Assuming you have the client_id and other necessary details
+
             client_id = self.api_key
             redirect_uri = self.redirect_uri
             api_version = "v2"
-            
-            # This will just return the authorization URL
-            # In a real application, you'd need to handle the OAuth flow manually
+
             auth_url = login_api.authorize(client_id, redirect_uri, api_version)
             logger.info(f"Authorization URL: {auth_url}")
-            
-            # Assuming you have the access token after the OAuth flow
-            api_client.configuration.access_token = self.code  # The UPSTOX_CODE is actually the access token
+
+            api_client.configuration.access_token = self.code  # Treating UPSTOX_CODE as access_token
             self.client = MarketQuoteApi(api_client)
-            
-            # Test the connection
+
             try:
                 profile = self.client.get_profile()
                 logger.info(f"Authentication successful for user: {profile['data']['user_name']}")
                 return True
             except Exception as e:
                 logger.error(f"Failed to validate access token: {str(e)}")
-                # If the access token is invalid or expired, try to refresh it
                 return self._refresh_token()
-            
+
         except Exception as e:
             logger.error(f"Authentication error: {str(e)}")
             return False
-    
+
     def _refresh_token(self):
         """Refresh the access token if needed"""
         try:
-            # Generate and set access token using authorization code
             url = "https://api.upstox.com/v2/login/authorization/token"
             headers = {
                 'accept': 'application/json',
@@ -551,88 +555,78 @@ class UpstoxClient:
                 'redirect_uri': self.redirect_uri,
                 'grant_type': 'authorization_code'
             }
-            
+
             response = requests.post(url, headers=headers, data=data)
             response_data = json.loads(response.text)
-            
+
             if 'access_token' not in response_data:
                 logger.error(f"Authentication failed: {response.text}")
                 return False
-            
-            # Store access token
+
             self.access_token = response_data['access_token']
-            
-            # Create client with access token
+
             api_client = ApiClient()
             api_client.configuration.access_token = self.access_token
             self.client = MarketQuoteApi(api_client)
-            
+
             logger.info("Authentication refreshed successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"Token refresh error: {str(e)}")
             return False
-    
-    def get_historical_data(self, instrument_key, interval, from_date, to_date):
+
+    def fetch_historical_data(self, instrument_key, interval, from_date, to_date):
         """
-        Get historical OHLCV data from Upstox
-        
+        Fetch historical OHLCV data from Upstox
+
         Args:
-            instrument_key: Instrument identifier
-            interval: Time interval (1D, 1W, etc.)
-            from_date: Start date (YYYY-MM-DD)
-            to_date: End date (YYYY-MM-DD)
-        
+            instrument_key (str): Instrument identifier
+            interval (str): Time interval (e.g., '1D', '1W')
+            from_date (str): Start date (YYYY-MM-DD)
+            to_date (str): End date (YYYY-MM-DD)
+
         Returns:
-            DataFrame with OHLCV data
+            pd.DataFrame: DataFrame containing OHLCV data
         """
         try:
-            # Convert dates to epoch
             from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
             to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
-            
-            # Make API request
+
             historical_data = self.client.historical_candle_data(
                 instrument_key=instrument_key,
                 interval=interval,
                 to_date=to_epoch,
                 from_date=from_epoch
             )
-            
-            # Extract candle data
+
             candles = historical_data['data']['candles']
-            
-            # Create DataFrame
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
-            
+
             return df
-            
+
         except Exception as e:
-            logger.error(f"Error getting historical data: {str(e)}")
+            logger.error(f"Error fetching historical data: {str(e)}")
             return None
 
     def get_instrument_details(self, instrument_key):
         """Get instrument details from Upstox"""
         try:
-            # Get market quote for the instrument
             market_quote = self.client.get_market_quote_full(instrument_key)
-            
-            # Extract basic instrument details from response
             instrument_details = {
                 'name': market_quote['data']['company_name'],
                 'tradingsymbol': market_quote['data']['symbol'],
                 'exchange': market_quote['data']['exchange'],
                 'last_price': market_quote['data']['last_price']
             }
-            
             return instrument_details
-            
+
         except Exception as e:
             logger.error(f"Error getting instrument details: {str(e)}")
             return None
+
 
 # ===============================================================
 # Candlestick Pattern Recognition
