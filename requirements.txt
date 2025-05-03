@@ -4,7 +4,6 @@ pandas>=2.2.0
 scipy>=1.12.0
 
 # Technical Analysis dependencies
-ta-lib>=0.4.24  # Technical analysis library for indicators
 scikit-learn>=1.3.0  # For machine learning patterns
 
 # Telegram Integration
