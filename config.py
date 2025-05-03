@@ -11,10 +11,12 @@ import os
 from datetime import datetime, timedelta
 
 # API Credentials (use environment variables in production)
-UPSTOX_API_KEY = os.environ.get("UPSTOX_API_KEY", "ad55de1b-c7d1-4adc-b559-3830bf1efd72")
-UPSTOX_API_SECRET = os.environ.get("UPSTOX_API_SECRET", "969nyjgapm") 
-UPSTOX_REDIRECT_URI = os.environ.get("UPSTOX_REDIRECT_URI", "https://localhost")
+UPSTOX_API_KEY = "ad55de1b-c7d1-4adc-b559-3830bf1efd72"
+UPSTOX_API_SECRET = "969nyjgapm"
+UPSTOX_REDIRECT_URI = "https://localhost"
 UPSTOX_CODE = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TEFGUDkiLCJqdGkiOiI2ODE1YjA2ZmM4MjAxZTA1NzU3YmRlZjEiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc0NjI1MTg4NywiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzQ2MzA5NjAwfQ.ThTVLyRZOax8PaoP5yG5vSbDrw7NaPw1Io1m0_asex4"
+UPSTOX_ACCESS_TOKEN = "eyJ0eXAiOiJKV1QiLCJrZXlfaWQiOiJza192MS4wIiwiYWxnIjoiSFMyNTYifQ.eyJzdWIiOiI0TEFGUDkiLCJqdGkiOiI2ODE1YjA2ZmM4MjAxZTA1NzU3YmRlZjEiLCJpc011bHRpQ2xpZW50IjpmYWxzZSwiaXNQbHVzUGxhbiI6ZmFsc2UsImlhdCI6MTc0NjI1MTg4NywiaXNzIjoidWRhcGktZ2F0ZXdheS1zZXJ2aWNlIiwiZXhwIjoxNzQ2MzA5NjAwfQ.ThTVLyRZOax8PaoP5yG5vSbDrw7NaPw1Io1m0_asex4"
+
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "7209852741:AAEf-_f6TeZK1-_R55yq365iU_54rk95y-c")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "936205208")
