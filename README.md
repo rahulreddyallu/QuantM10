@@ -1,4 +1,3 @@
-markdown name=README.md
 # Master Trading Signal Bot
 
 ![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)
