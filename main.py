@@ -16,7 +16,14 @@ import json
 import datetime
 import traceback
 import argparse
+import upstox_client
 from pathlib import Path
+from upstox_client.models.ohlc import Ohlc as OHLCInterval
+from upstox_client.api_client import ApiClient
+from upstox_client.api.login_api import LoginApi
+from upstox_client.api.market_quote_api import MarketQuoteApi
+from upstox_client.api.history_api import HistoryApi
+import importlib
 
 # Import the core logic from compute.py
 from compute import TechnicalAnalysis, CandlestickPatterns, TradingSignalBot, BacktestEngine
