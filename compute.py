@@ -488,66 +488,50 @@ def get_stock_info_by_key(instrument_key, stock_info_dict):
 # ===============================================================
 # Market Data Handling
 # ===============================================================
+
 class UpstoxClient:
-    """Client for interacting with Upstox API"""
-    
-    def __init__(self, config):
+    def __init__(self):
         """Initialize Upstox client with API credentials"""
-        self.api_key = config.get('UPSTOX_API_KEY', '')
-        self.api_secret = config.get('UPSTOX_API_SECRET', '')
-        self.redirect_uri = config.get('UPSTOX_REDIRECT_URI', '')
-        self.code = config.get('UPSTOX_CODE', '')
+        self.api_key = config.UPSTOX_API_KEY
+        self.api_secret = config.UPSTOX_API_SECRET
+        self.redirect_uri = config.UPSTOX_REDIRECT_URI
+        self.code = config.UPSTOX_CODE
         self.access_token = None
         self.client = None
-        self.logger = logging.getLogger(__name__)
         
     def authenticate(self):
-        """
-        Authenticate with Upstox API using a hardcoded token from config.py
-        
-        Returns:
-            bool: True if authentication is successful, False otherwise
-        """
+        """Authenticate with Upstox API"""
         try:
-            # Get the token directly from config
-            access_token = self.config.get('UPSTOX_CODE')
-            
-            if not access_token:
-                self.logger.error("No access token found in config (UPSTOX_CODE)")
-                return False
-                
-            self.logger.info(f"Authenticating with hardcoded token: {access_token[:5]}***")
-            
-            # Initialize API client with token
+            # Initialize API client
             api_client = ApiClient()
-            api_client.configuration.access_token = access_token
+            login_api = LoginApi(api_client)
             
-            # Initialize API clients
+            # Assuming you have the client_id and other necessary details
+            client_id = self.api_key
+            redirect_uri = self.redirect_uri
+            api_version = "v2"
+            
+            # This will just return the authorization URL
+            # In a real application, you'd need to handle the OAuth flow manually
+            auth_url = login_api.authorize(client_id, redirect_uri, api_version)
+            logger.info(f"Authorization URL: {auth_url}")
+            
+            # Assuming you have the access token after the OAuth flow
+            api_client.configuration.access_token = self.code  # The UPSTOX_CODE is actually the access token
+            self.client = MarketQuoteApi(api_client)
+            
+            # Test the connection
             try:
-                self.market_client = MarketQuoteApi(api_client)
-                self.history_client = HistoryApi(api_client)
-                
-                # Test the connection with an appropriate method (try multiple methods for compatibility)
-                try:
-                    test_data = self.market_client.get_ltp(["NSE_INDEX|Nifty 50"])
-                    self.logger.info("Authentication successful using hardcoded token")
-                    return True
-                except AttributeError:
-                    # Try an alternative method if the first one isn't available
-                    try:
-                        test_data = self.market_client.get_quotes(["NSE_INDEX|Nifty 50"])
-                        self.logger.info("Authentication successful using hardcoded token")
-                        return True
-                    except AttributeError:
-                        # As a last resort, just assume it worked since we can't test
-                        self.logger.warning("Could not test connection, assuming token is valid")
-                        return True
+                profile = self.client.get_profile()
+                logger.info(f"Authentication successful for user: {profile['data']['user_name']}")
+                return True
             except Exception as e:
-                self.logger.error(f"Failed to initialize API clients: {str(e)}")
-                return False
-                
+                logger.error(f"Failed to validate access token: {str(e)}")
+                # If the access token is invalid or expired, try to refresh it
+                return self._refresh_token()
+            
         except Exception as e:
-            self.logger.error(f"Authentication error: {str(e)}")
+            logger.error(f"Authentication error: {str(e)}")
             return False
     
     def _refresh_token(self):
@@ -568,12 +552,11 @@ class UpstoxClient:
                 'grant_type': 'authorization_code'
             }
             
-            import requests  # Import here to avoid dependency if not used
             response = requests.post(url, headers=headers, data=data)
             response_data = json.loads(response.text)
             
             if 'access_token' not in response_data:
-                self.logger.error(f"Authentication failed: {response.text}")
+                logger.error(f"Authentication failed: {response.text}")
                 return False
             
             # Store access token
@@ -584,11 +567,11 @@ class UpstoxClient:
             api_client.configuration.access_token = self.access_token
             self.client = MarketQuoteApi(api_client)
             
-            self.logger.info("Authentication refreshed successfully")
+            logger.info("Authentication refreshed successfully")
             return True
             
         except Exception as e:
-            self.logger.error(f"Token refresh error: {str(e)}")
+            logger.error(f"Token refresh error: {str(e)}")
             return False
     
     def get_historical_data(self, instrument_key, interval, from_date, to_date):
@@ -605,17 +588,12 @@ class UpstoxClient:
             DataFrame with OHLCV data
         """
         try:
-            # Create a historical candle API client
-            api_client = ApiClient()
-            api_client.configuration.access_token = self.code
-            historical_client = HistoryApi(api_client)
-            
             # Convert dates to epoch
-            from_epoch = int(datetime.datetime.strptime(from_date, "%Y-%m-%d").timestamp())
-            to_epoch = int(datetime.datetime.strptime(to_date, "%Y-%m-%d").timestamp())
+            from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
+            to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
             
             # Make API request
-            historical_data = historical_client.get_historical_candle_data(
+            historical_data = self.client.historical_candle_data(
                 instrument_key=instrument_key,
                 interval=interval,
                 to_date=to_epoch,
@@ -623,61 +601,38 @@ class UpstoxClient:
             )
             
             # Extract candle data
-            candles = historical_data.data.candles
+            candles = historical_data['data']['candles']
             
             # Create DataFrame
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'oi'])
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
             
-            # Ensure numeric types for all columns
-            numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'oi']
-            for col in numeric_columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-            
-            # Sort by timestamp (oldest to newest)
-            df.sort_index(inplace=True)
-            
-            # Check for minimum data points
-            if len(df) < 30:
-                self.logger.warning(f"Retrieved only {len(df)} candles for {instrument_key}, which may be insufficient for reliable analysis")
-            
-            self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
             return df
             
         except Exception as e:
-            self.logger.error(f"Error getting historical data: {str(e)}")
-            raise DataFetchError(instrument_key, cause=e)
+            logger.error(f"Error getting historical data: {str(e)}")
+            return None
 
     def get_instrument_details(self, instrument_key):
         """Get instrument details from Upstox"""
         try:
             # Get market quote for the instrument
-            market_quote = self.client.get_full_market_quote([instrument_key])
+            market_quote = self.client.get_market_quote_full(instrument_key)
             
             # Extract basic instrument details from response
-            data = market_quote.data[instrument_key]
-            
             instrument_details = {
-                'name': data.company_name,
-                'tradingsymbol': data.symbol,
-                'exchange': data.exchange,
-                'last_price': data.last_price,
-                'change_pct': data.change_percentage,
-                'volume': data.volume,
-                'ohlc': {
-                    'open': data.ohlc.open,
-                    'high': data.ohlc.high,
-                    'low': data.ohlc.low,
-                    'close': data.ohlc.close
-                }
+                'name': market_quote['data']['company_name'],
+                'tradingsymbol': market_quote['data']['symbol'],
+                'exchange': market_quote['data']['exchange'],
+                'last_price': market_quote['data']['last_price']
             }
             
             return instrument_details
             
         except Exception as e:
-            self.logger.error(f"Error getting instrument details: {str(e)}")
-            raise DataFetchError(instrument_key, f"Failed to get instrument details", cause=e)
+            logger.error(f"Error getting instrument details: {str(e)}")
+            return None
 
 # ===============================================================
 # Candlestick Pattern Recognition
