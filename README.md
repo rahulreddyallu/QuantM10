@@ -1,4 +1,3 @@
-```markdown name=README.md
 # Master Trading Signal Bot
 
 ![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)
@@ -19,8 +18,6 @@ An advanced algorithmic trading signal generator with comprehensive technical an
 - **Modular Architecture**: Easily extendable for custom indicators and strategies
 
 ## System Architecture
-
-```
 ┌──────────────────┐     ┌───────────────────┐     ┌───────────────────┐
 │ Market Data API  │────▶│ Technical Analysis │────▶│   Signal Engine   │
 └──────────────────┘     └───────────────────┘     └─────────┬─────────┘
