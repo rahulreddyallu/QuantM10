@@ -7,9 +7,6 @@ numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
 
-# Upstox API Integration
-upstox-python-sdk>=2.14.0  # Correct package for Upstox API
-
 # Telegram Integration
 aiogram>=3.2.0  # Modern Telegram bot framework
 python-telegram-bot>=20.6.0 # Dependency for Telegram integration
@@ -51,3 +48,6 @@ pyarrow>=14.0.0  # For optimized DataFrame operations
 # Testing (optional for development)
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+
+# Upstox API Integration
+upstox-python-sdk>=2.14.0  # Correct package for Upstox API
