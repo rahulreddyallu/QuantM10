@@ -1,5 +1,4 @@
-# QuantM10
-
+```markdown name=README.md
 # Master Trading Signal Bot
 
 ![Version](https://img.shields.io/badge/version-4.0.0-blue.svg)
@@ -21,9 +20,19 @@ An advanced algorithmic trading signal generator with comprehensive technical an
 
 ## System Architecture
 
-┌──────────────────┐ ┌───────────────────┐ ┌───────────────────┐ │ Market Data API │────▶│ Technical Analysis │────▶│ Signal Engine │ └──────────────────┘ └───────────────────┘ └─────────┬─────────┘ │ ┌──────────────────┐ ┌───────────────────┐ ┌─────────▼─────────┐ │ Telegram Alerts │◀────│ Risk Manager │◀────│ Trading Signals │ └──────────────────┘ └───────────────────┘ └───────────────────┘ ▲ │ │ ┌───────────────────┐ ┌───────────▼─────────┐ └─────────────│ Notification Mgr │◀─────│ Backtesting Engine │ └───────────────────┘ └───────────────────┘
-
-Code
+```
+┌──────────────────┐     ┌───────────────────┐     ┌───────────────────┐
+│ Market Data API  │────▶│ Technical Analysis │────▶│   Signal Engine   │
+└──────────────────┘     └───────────────────┘     └─────────┬─────────┘
+                                                             │
+┌──────────────────┐     ┌───────────────────┐     ┌─────────▼─────────┐
+│ Telegram Alerts  │◀────│    Risk Manager   │◀────│ Trading Signals   │
+└──────────────────┘     └───────────────────┘     └───────────────────┘
+        ▲                                                    │
+        │             ┌───────────────────┐      ┌───────────▼─────────┐
+        └─────────────│ Notification Mgr  │◀─────│ Backtesting Engine  │
+                      └───────────────────┘      └───────────────────┘
+```
 
 ## Installation
 
@@ -38,123 +47,134 @@ Code
    ```bash
    git clone https://github.com/yourusername/master-trading-signal-bot.git
    cd master-trading-signal-bot
-Create a virtual environment:
+   ```
 
-bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-Install dependencies:
+2. Create a virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
 
-bash
-pip install -r requirements.txt
-Set up environment variables:
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-bash
-# For Linux/Mac
-export UPSTOX_API_KEY="your_upstox_api_key"
-export UPSTOX_API_SECRET="your_upstox_api_secret"
-export TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
-export TELEGRAM_CHAT_ID="your_telegram_chat_id"
+4. Set up environment variables:
+   ```bash
+   # For Linux/Mac
+   export UPSTOX_API_KEY="your_upstox_api_key"
+   export UPSTOX_API_SECRET="your_upstox_api_secret"
+   export TELEGRAM_BOT_TOKEN="your_telegram_bot_token"
+   export TELEGRAM_CHAT_ID="your_telegram_chat_id"
+   
+   # For Windows
+   set UPSTOX_API_KEY=your_upstox_api_key
+   set UPSTOX_API_SECRET=your_upstox_api_secret
+   set TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+   set TELEGRAM_CHAT_ID=your_telegram_chat_id
+   ```
 
-# For Windows
-set UPSTOX_API_KEY=your_upstox_api_key
-set UPSTOX_API_SECRET=your_upstox_api_secret
-set TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-set TELEGRAM_CHAT_ID=your_telegram_chat_id
-Configuration
+## Configuration
 
-The system uses a config.py file for all configuration parameters. Key settings include:
+The system uses a `config.py` file for all configuration parameters. Key settings include:
 
-API Credentials: Upstox API keys and Telegram bot credentials
-Scheduling: Define when the bot runs during market hours
-Stock List: Instruments to analyze (using ISIN-based instrument keys)
-Technical Indicators: Customize parameters for each indicator
-Pattern Detection: Configure sensitivity thresholds for pattern recognition
-Signal Parameters: Adjust weights and thresholds for signal generation
-Backtesting: Define historical testing parameters and optimization settings
-Reference the config.py file comments for detailed parameter descriptions.
+- **API Credentials**: Upstox API keys and Telegram bot credentials
+- **Scheduling**: Define when the bot runs during market hours
+- **Stock List**: Instruments to analyze (using ISIN-based instrument keys)
+- **Technical Indicators**: Customize parameters for each indicator
+- **Pattern Detection**: Configure sensitivity thresholds for pattern recognition
+- **Signal Parameters**: Adjust weights and thresholds for signal generation
+- **Backtesting**: Define historical testing parameters and optimization settings
 
-Usage
+Reference the `config.py` file comments for detailed parameter descriptions.
 
-Running Modes
+## Usage
+
+### Running Modes
 
 The system can be run in several modes:
 
-Scheduled Mode (default):
+1. **Scheduled Mode** (default):
+   ```bash
+   python main.py
+   ```
+   Runs on schedule based on configured market times.
 
-bash
-python main.py
-Runs on schedule based on configured market times.
+2. **Adhoc Mode**:
+   ```bash
+   python main.py adhoc
+   ```
+   Executes one analysis cycle and exits.
 
-Adhoc Mode:
+3. **Backtest Mode**:
+   ```bash
+   python main.py backtest NSE_EQ|INE009A01021 --days 365 --output results.json
+   ```
+   Runs backtest for a specific instrument, optionally saving results to a file.
 
-bash
-python main.py adhoc
-Executes one analysis cycle and exits.
+4. **Parameter Optimization**:
+   ```bash
+   python main.py optimize NSE_EQ|INE009A01021 --output optimized.json
+   ```
+   Executes walk-forward optimization to find ideal parameters.
 
-Backtest Mode:
+5. **Multi-Stock Backtest**:
+   ```bash
+   python main.py multi --days 365 --output all_results.json
+   ```
+   Backtests all configured stocks and generates a comparative report.
 
-bash
-python main.py backtest NSE_EQ|INE009A01021 --days 365 --output results.json
-Runs backtest for a specific instrument, optionally saving results to a file.
+## Technical Components
 
-Parameter Optimization:
-
-bash
-python main.py optimize NSE_EQ|INE009A01021 --output optimized.json
-Executes walk-forward optimization to find ideal parameters.
-
-Multi-Stock Backtest:
-
-bash
-python main.py multi --days 365 --output all_results.json
-Backtests all configured stocks and generates a comparative report.
-
-Technical Components
-
-Technical Indicators
+### Technical Indicators
 
 The system implements a comprehensive suite of technical indicators:
 
-Category	Indicators
-Trend	Moving Averages (SMA, EMA, DEMA, TEMA, WMA, HMA), Supertrend, Parabolic SAR, ADX, Aroon, Alligator
-Momentum	MACD, RSI, Stochastic, Stochastic RSI, ROC, Williams %R, Ultimate Oscillator
-Volatility	Bollinger Bands, ATR, ATR Bands
-Volume	OBV, VWAP, Chaikin Money Flow, Volume Profile
-Support/Resistance	Fibonacci Retracements, CPR (Central Pivot Range), Support/Resistance Levels
-Each indicator is fully configurable through the config.py file.
+| Category | Indicators |
+|----------|------------|
+| Trend | Moving Averages (SMA, EMA, DEMA, TEMA, WMA, HMA), Supertrend, Parabolic SAR, ADX, Aroon, Alligator |
+| Momentum | MACD, RSI, Stochastic, Stochastic RSI, ROC, Williams %R, Ultimate Oscillator |
+| Volatility | Bollinger Bands, ATR, ATR Bands |
+| Volume | OBV, VWAP, Chaikin Money Flow, Volume Profile |
+| Support/Resistance | Fibonacci Retracements, CPR (Central Pivot Range), Support/Resistance Levels |
 
-Candlestick Patterns
+Each indicator is fully configurable through the `config.py` file.
+
+### Candlestick Patterns
 
 The system detects the following candlestick patterns:
 
-Single Candle: Marubozu, Doji, Spinning Top, Paper Umbrella, Hammer, Hanging Man, Shooting Star
-Multi-Candle: Engulfing, Harami, Piercing Pattern, Dark Cloud Cover, Morning Star, Evening Star, Three White Soldiers, Three Black Crows
+- **Single Candle**: Marubozu, Doji, Spinning Top, Paper Umbrella, Hammer, Hanging Man, Shooting Star
+- **Multi-Candle**: Engulfing, Harami, Piercing Pattern, Dark Cloud Cover, Morning Star, Evening Star, Three White Soldiers, Three Black Crows
+
 Pattern detection uses precise mathematical criteria with configurable thresholds.
 
-Chart Patterns
+### Chart Patterns
 
 The system implements detection algorithms for these chart patterns:
 
-Reversal Patterns: Head and Shoulders, Inverse Head and Shoulders, Double Top/Bottom, Triple Top/Bottom, Rounding Top/Bottom
-Continuation Patterns: Cup and Handle, Wedges, Rectangles, Flags, Pennants
-Backtesting Engine
+- **Reversal Patterns**: Head and Shoulders, Inverse Head and Shoulders, Double Top/Bottom, Triple Top/Bottom, Rounding Top/Bottom
+- **Continuation Patterns**: Cup and Handle, Wedges, Rectangles, Flags, Pennants
+
+### Backtesting Engine
 
 The backtesting system features:
 
-Historical performance evaluation with detailed metrics
-Position sizing and risk management simulation
-Monte Carlo simulations for robustness testing
-Walk-forward optimization for parameter tuning
-Equity curve and drawdown analysis
-Detailed performance reporting
-API Integration
+- Historical performance evaluation with detailed metrics
+- Position sizing and risk management simulation
+- Monte Carlo simulations for robustness testing
+- Walk-forward optimization for parameter tuning
+- Equity curve and drawdown analysis
+- Detailed performance reporting
 
-Upstox API
+## API Integration
+
+### Upstox API
 
 The system integrates with Upstox for market data:
 
-Python
+```python
 # Example: Fetching historical data
 async def fetch_historical_data(self, instrument_key, interval='1D', days=250):
     """
@@ -169,11 +189,13 @@ async def fetch_historical_data(self, instrument_key, interval='1D', days=250):
         DataFrame with OHLCV data
     """
     # Implementation details in compute.py
-Telegram Integration
+```
+
+### Telegram Integration
 
 Real-time alerts are sent via Telegram:
 
-Python
+```python
 # Example: Sending a signal alert
 async def send_signal_alert(self, result):
     """
@@ -186,39 +208,42 @@ async def send_signal_alert(self, result):
         True if alert was sent successfully, False otherwise
     """
     # Implementation details in compute.py
-Extending the System
+```
 
-Adding New Indicators
+## Extending the System
+
+### Adding New Indicators
 
 To add a new technical indicator:
 
-Create a new method in the TechnicalIndicators class in compute.py:
+1. Create a new method in the `TechnicalIndicators` class in `compute.py`:
+   ```python
+   def calculate_new_indicator(self):
+       """Calculate your new indicator"""
+       # Implementation
+       self.df['new_indicator'] = # calculation
+       
+       # Generate signals
+       # ...
+       
+       self.indicators['new_indicator'] = {
+           'signal': current_signal,
+           'signal_strength': signal_strength,
+           'values': {
+               # indicator values
+           }
+       }
+   ```
 
-Python
-def calculate_new_indicator(self):
-    """Calculate your new indicator"""
-    # Implementation
-    self.df['new_indicator'] = # calculation
-    
-    # Generate signals
-    # ...
-    
-    self.indicators['new_indicator'] = {
-        'signal': current_signal,
-        'signal_strength': signal_strength,
-        'values': {
-            # indicator values
-        }
-    }
-Add the method call in the calculate_all() method.
+2. Add the method call in the `calculate_all()` method.
 
-Add configuration parameters to config.py.
+3. Add configuration parameters to `config.py`.
 
-Custom Strategies
+### Custom Strategies
 
 Create custom backtesting strategies by defining a strategy function:
 
-Python
+```python
 def my_strategy(data, **params):
     """
     Custom trading strategy
@@ -232,31 +257,42 @@ def my_strategy(data, **params):
     """
     # Your strategy logic here
     return signal # 1, -1, or 0
+```
+
 Run with your custom strategy:
 
-bash
+```bash
 python main.py backtest NSE_EQ|INE009A01021 --strategy my_strategy
-Performance Considerations
+```
 
-Data Caching: Historical data is cached to minimize API calls
-Async Processing: Asynchronous operations for improved throughput
-Error Handling: Comprehensive try-except blocks for robustness
-Resource Management: Proper cleanup of resources like API connections
-Troubleshooting
+## Performance Considerations
 
-Issue	Solution
-API Connection Errors	Check API credentials and network connectivity
-Missing Dependencies	Run pip install -r requirements.txt to install all required packages
-Insufficient Historical Data	Ensure selected stocks have adequate trading history
-No Signals Generated	Check minimum signal strength threshold in configuration
-Backtest Errors	Verify data completeness and parameter validity
-License
+- **Data Caching**: Historical data is cached to minimize API calls
+- **Async Processing**: Asynchronous operations for improved throughput
+- **Error Handling**: Comprehensive try-except blocks for robustness
+- **Resource Management**: Proper cleanup of resources like API connections
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| API Connection Errors | Check API credentials and network connectivity |
+| Missing Dependencies | Run `pip install -r requirements.txt` to install all required packages |
+| Insufficient Historical Data | Ensure selected stocks have adequate trading history |
+| No Signals Generated | Check minimum signal strength threshold in configuration |
+| Backtest Errors | Verify data completeness and parameter validity |
+
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-Author
+## Author
 
-Rahul Reddy Allu
-Version 4.0.0
-Last Updated: 2025-05-03
+- **Rahul Reddy Allu**
+- Version 4.0.0
+- Last Updated: 2025-05-03
+
+---
+
 © 2025 Master Trading Signal Bot
+```
