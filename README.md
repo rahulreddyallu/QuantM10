@@ -29,7 +29,7 @@ An advanced algorithmic trading signal generator with comprehensive technical an
         │             ┌───────────────────┐      ┌───────────▼─────────┐
         └─────────────│ Notification Mgr  │◀─────│ Backtesting Engine  │
                       └───────────────────┘      └───────────────────┘
-```
+
 
 ## Installation
 
