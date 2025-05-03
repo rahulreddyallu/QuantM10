@@ -54,8 +54,5 @@ cython>=3.0.0  # For compiled performance-critical code
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
 
-# Additional dependencies for pattern detection
-pattern-recognition>=0.1.0  # For chart pattern recognition
-
 # Upstox API Integration - CRITICAL FIX
 upstox-python-sdk>=2.14.0  # SDK version 
