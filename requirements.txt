@@ -12,6 +12,7 @@ upstox-python-sdk>=2.14.0  # Correct package for Upstox API
 
 # Telegram Integration
 aiogram>=3.2.0  # Modern Telegram bot framework
+python-telegram-bot>=20.6.0 # Dependency for Telegram integration
 
 # Scheduling
 apscheduler>=3.10.1  # For scheduled task execution
