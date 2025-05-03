@@ -288,10 +288,10 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 ## Author
 
 - **Rahul Reddy Allu**
-- Version 4.0.0
+- Version 1.0.0
 - Last Updated: 2025-05-03
 
 ---
 
-© 2025 Master Trading Signal Bot
+© 2025 QuantM10
 ```
