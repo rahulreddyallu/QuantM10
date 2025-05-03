@@ -503,105 +503,52 @@ class UpstoxClient:
         
     def authenticate(self):
         """
-        Authenticate with Upstox API using the new user-approval OAuth flow
+        Authenticate with Upstox API using a hardcoded token from config.py
         
         Returns:
             bool: True if authentication is successful, False otherwise
         """
         try:
-            # Initialize API client
-            api_client = ApiClient()
-            self.login_api = LoginApi(api_client)
+            # Get the token directly from config
+            access_token = self.config.get('UPSTOX_CODE')
             
-            # Get credentials
-            client_id = self.api_key
-            client_secret = self.api_secret
-            
-            self.logger.info(f"Initiating Upstox authentication with client ID: {client_id[:4]}***")
-            
-            # Step 1: Request access token (this triggers user notification)
-            try:
-                # The new endpoint is /login/auth/token/request/:client_id with client_secret in body
-                headers = {
-                    'Content-Type': 'application/json',
-                    'Accept': 'application/json'
-                }
-                
-                import requests
-                url = f"https://api.upstox.com/v3/login/auth/token/request/{client_id}"
-                payload = {"client_secret": client_secret}
-                
-                response = requests.post(url, json=payload, headers=headers)
-                response_data = response.json()
-                
-                if response.status_code == 200 and response_data.get('status') == 'success':
-                    auth_expiry = response_data.get('data', {}).get('authorization_expiry')
-                    notifier_url = response_data.get('data', {}).get('notifier_url')
-                    
-                    self.logger.info(f"Authentication request initiated successfully")
-                    self.logger.info(f"Authorization expires at: {auth_expiry}")
-                    self.logger.info(f"Token will be sent to webhook: {notifier_url}")
-                    
-                    # Important user instructions
-                    print("\n" + "="*80)
-                    print("AUTHENTICATION REQUIRED - USER ACTION NEEDED")
-                    print("="*80)
-                    print("\nA notification has been sent to your Upstox app and WhatsApp.")
-                    print("Please APPROVE the request to generate an access token.")
-                    print("\nAfter approval, the token will be sent to your configured webhook.")
-                    print("\nIf you haven't set up a webhook during app registration, you'll need to:")
-                    print("1. Log in to the Upstox Developer Portal")
-                    print("2. Update your app with a valid webhook URL")
-                    print("3. Or manually obtain the token and configure it")
-                    print("="*80 + "\n")
-                    
-                    # For development/testing: Allow manual token input
-                    manual_token = input("If you have the token, enter it here (or press Enter to skip): ").strip()
-                    if manual_token:
-                        # Use the manually entered token
-                        api_client.configuration.access_token = manual_token
-                        self.logger.info("Using manually entered access token")
-                    else:
-                        self.logger.warning("No access token provided. Authentication incomplete.")
-                        return False
-                    
-                else:
-                    error_message = response_data.get('errors', [{}])[0].get('message', 'Unknown error')
-                    self.logger.error(f"Authentication request failed: {error_message}")
-                    return False
-                    
-            except Exception as e:
-                self.logger.error(f"Failed to request authentication: {str(e)}")
+            if not access_token:
+                self.logger.error("No access token found in config (UPSTOX_CODE)")
                 return False
                 
-            # Step 2: Initialize API clients with the token
+            self.logger.info(f"Authenticating with hardcoded token: {access_token[:5]}***")
+            
+            # Initialize API client with token
+            api_client = ApiClient()
+            api_client.configuration.access_token = access_token
+            
+            # Initialize API clients
             try:
                 self.market_client = MarketQuoteApi(api_client)
                 self.history_client = HistoryApi(api_client)
                 
-                # Test the connection with an appropriate method
+                # Test the connection with an appropriate method (try multiple methods for compatibility)
                 try:
-                    # Try different methods based on what's available in the API version
                     test_data = self.market_client.get_ltp(["NSE_INDEX|Nifty 50"])
-                    self.logger.info("Authentication and connection test successful")
+                    self.logger.info("Authentication successful using hardcoded token")
                     return True
                 except AttributeError:
-                    # If method doesn't exist, try a different one
+                    # Try an alternative method if the first one isn't available
                     try:
                         test_data = self.market_client.get_quotes(["NSE_INDEX|Nifty 50"])
-                        self.logger.info("Authentication and connection test successful")
+                        self.logger.info("Authentication successful using hardcoded token")
                         return True
-                    except:
-                        self.logger.warning("Could not verify connection, but token is set")
+                    except AttributeError:
+                        # As a last resort, just assume it worked since we can't test
+                        self.logger.warning("Could not test connection, assuming token is valid")
                         return True
-                        
             except Exception as e:
-                self.logger.error(f"API connection test failed: {str(e)}")
+                self.logger.error(f"Failed to initialize API clients: {str(e)}")
                 return False
                 
         except Exception as e:
             self.logger.error(f"Authentication error: {str(e)}")
-            raise APIConnectionError(f"Failed to connect to Upstox API: {str(e)}")
+            return False
     
     def _refresh_token(self):
         """Refresh the access token if needed"""
