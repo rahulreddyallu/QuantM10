@@ -3,9 +3,6 @@ numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
 
-# Upstox API Integration - CRITICAL FIX
-upstox-python-sdk>=2.14.0  # SDK version 
-
 # Technical Analysis dependencies
 ta-lib>=0.4.24  # Technical analysis library for indicators
 scikit-learn>=1.3.0  # For machine learning patterns
@@ -59,3 +56,6 @@ pytest-asyncio>=0.23.0
 
 # Additional dependencies for pattern detection
 pattern-recognition>=0.1.0  # For chart pattern recognition
+
+# Upstox API Integration - CRITICAL FIX
+upstox-python-sdk>=2.14.0  # SDK version 
