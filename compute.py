@@ -6211,48 +6211,89 @@ class TradingSignalBot:
         
         self.logger.info("Trading Signal Bot initialized successfully")
     
-    async def fetch_historical_data(self, instrument_key, interval='1D', days=250):
+    async def fetch_historical_data(self, instrument_key, interval="1D", days=60):
         """
-        Fetch historical data for a given instrument
+        Fetch historical OHLCV data from Upstox
         
         Args:
             instrument_key: Instrument identifier
-            interval: Candle interval
-            days: Number of days to fetch
+            interval: Time interval (1D, 1W, etc.)
+            days: Number of days of history to fetch
             
         Returns:
             DataFrame with OHLCV data
         """
-        # Check if data is in cache
-        cache_key = f"{instrument_key}_{interval}_{days}"
-        if cache_key in self.data_cache:
-            return self.data_cache[cache_key]
-        
-        # Authenticate client if needed
-        if self.client is None:
-            self.logger.error("Upstox client not available")
-            raise APIConnectionError("Upstox client not available")
-        
-        if not self.client.authenticate():
-            self.logger.error("Failed to authenticate with Upstox")
-            raise APIConnectionError("Failed to authenticate with Upstox")
-        
-        # Calculate date range
-        to_date = datetime.datetime.now().strftime("%Y-%m-%d")
-        from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
-        
         try:
-            # Fetch data from Upstox
-            self.logger.info(f"Fetching historical data for {instrument_key}, interval {interval}")
-            df = self.client.get_historical_data(instrument_key, interval, from_date, to_date)
+            # Step 1: Check if Upstox client exists and is authenticated
+            if not hasattr(self, 'upstox_client') or self.upstox_client is None:
+                self.logger.warning("Upstox client not found, attempting to initialize")
+                
+                # Initialize client
+                from upstox_client.api import ApiClient, MarketQuoteApi, HistoryApi
+                
+                api_client = ApiClient()
+                
+                # Get token from config 
+                token = self.config.get('UPSTOX_CODE')
+                if not token:
+                    raise APIConnectionError("Upstox access token not found in configuration")
+                
+                # Set token directly
+                api_client.configuration.access_token = token
+                
+                # Initialize the client and store it
+                self.upstox_client = api_client
+                self.client = HistoryApi(api_client)  # For historical data
+                
+                self.logger.info("Upstox client initialized with token")
+                
+            # Step 2: Set up date range
+            to_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Cache the data
-            self.data_cache[cache_key] = df
+            # Convert dates to epoch
+            from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
+            to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
             
+            # Step 3: Make API request
+            try:
+                historical_data = self.client.historical_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    to_date=to_epoch,
+                    from_date=from_epoch
+                )
+            except AttributeError:
+                # Try alternative method name that might exist in different API versions
+                historical_data = self.client.get_candle_data(
+                    instrument_key=instrument_key,
+                    interval=interval,
+                    to_date=to_epoch,
+                    from_date=from_epoch
+                )
+            
+            # Step 4: Extract candle data
+            if 'data' not in historical_data or 'candles' not in historical_data['data']:
+                self.logger.error(f"Unexpected response format: {historical_data}")
+                return None
+                
+            candles = historical_data['data']['candles']
+            
+            # Step 5: Create DataFrame
+            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            df.set_index('timestamp', inplace=True)
+            
+            # Convert columns to numeric types
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+                
+            self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
             return df
+                
         except Exception as e:
-            self.logger.error(f"Error fetching historical data: {e}")
-            raise DataFetchError(instrument_key, cause=e)
+            self.logger.error(f"Error fetching historical data: {str(e)}")
+            raise APIConnectionError(f"Failed to fetch historical data: {str(e)}")
     
     async def generate_signals(self, instrument_key):
         """
