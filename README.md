@@ -21,7 +21,7 @@ An advanced algorithmic trading signal generator with comprehensive technical an
 
 ```
 ┌──────────────────┐     ┌───────────────────┐     ┌───────────────────┐
-│ Market Data API  │────▶│ Technical Analysis │────▶│   Signal Engine   │
+│ Market Data API  │────▶│ Technical Analysis│────▶│   Signal Engine   │
 └──────────────────┘     └───────────────────┘     └─────────┬─────────┘
                                                              │
 ┌──────────────────┐     ┌───────────────────┐     ┌─────────▼─────────┐
@@ -30,7 +30,7 @@ An advanced algorithmic trading signal generator with comprehensive technical an
         ▲                                                    │
         │             ┌───────────────────┐      ┌───────────▼─────────┐
         └─────────────│ Notification Mgr  │◀─────│ Backtesting Engine  │
-                      └───────────────────┘      └───────────────────┘
+                      └───────────────────┘      └─────────────────────┘
 ```
 
 ## Installation
