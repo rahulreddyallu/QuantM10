@@ -35,7 +35,8 @@ try:
     from upstox_client.api_client import ApiClient
     from upstox_client.api.login_api import LoginApi
     from upstox_client.api.market_quote_api import MarketQuoteApi
-    from upstox_client.api.historical_candle_api import HistoricalCandleApi
+    from upstox_client.api.history_api import HistoryApi
+    from upstox_client.models.ohlc import Ohlc as OHLCInterval
 except ImportError:
     logging.critical("Required Upstox client dependencies not found. Please install them.")
     sys.exit(1)
@@ -594,7 +595,7 @@ class UpstoxClient:
             # Create a historical candle API client
             api_client = ApiClient()
             api_client.configuration.access_token = self.code
-            historical_client = HistoricalCandleApi(api_client)
+            historical_client = HistoryApi(api_client)
             
             # Convert dates to epoch
             from_epoch = int(datetime.datetime.strptime(from_date, "%Y-%m-%d").timestamp())
