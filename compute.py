@@ -913,12 +913,6 @@ class CandlestickPatterns:
                 }
                 return params.get(name, 0.1)
                 
-            def get_indicator_param(self, name):
-                params = {
-                    'high_volume_threshold': 1.5
-                }
-                return params.get(name, 1.0)
-                
             def get_signal_param(self, name):
                 if name == 'pattern_strength_weights':
                     return {
