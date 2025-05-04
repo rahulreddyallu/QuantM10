@@ -1066,50 +1066,59 @@ class CandlestickPatterns:
     
     def detect_engulfing(self):
         """
-        Detect Engulfing patterns (two-candle reversal pattern) using vectorized operations
+        Detects bullish and bearish engulfing patterns
         
-        Returns:
-            Dictionary with bullish_engulfing and bearish_engulfing Series
+        A bullish engulfing pattern occurs when a small bearish candle is followed by
+        a larger bullish candle that completely "engulfs" the previous candle.
+        
+        A bearish engulfing pattern occurs when a small bullish candle is followed by
+        a larger bearish candle that completely "engulfs" the previous candle.
         """
-        # Initialize result Series
-        bullish_engulfing = pd.Series(False, index=self.df.index)
-        bearish_engulfing = pd.Series(False, index=self.df.index)
-        
-        # We need at least 2 candles to detect engulfing patterns
-        if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
-            return {'bullish_engulfing': bullish_engulfing, 'bearish_engulfing': bearish_engulfing}
-        
-        # Create shifted dataframes for comparison
-        df_prev = self.df.shift(1)
-        
-        # Bullish Engulfing (vectorized)
-        bullish_engulfing_condition = (
-            ~self.df['is_bullish'].shift(1) &  # Previous candle is bearish
-            self.df['is_bullish'] &            # Current candle is bullish
-            (self.df['open'] <= df_prev['close']) &  # Current open below previous close
-            (self.df['close'] >= df_prev['open'])    # Current close above previous open
-        )
-        
-        # Add trend context (at least 5 periods of history)
-        downtrend_context = self.df['downtrend'].shift(1)
-        bullish_engulfing_valid = bullish_engulfing_condition & downtrend_context
-        
-        # Bearish Engulfing (vectorized)
-        bearish_engulfing_condition = (
-            self.df['is_bullish'].shift(1) &    # Previous candle is bullish
-            ~self.df['is_bullish'] &            # Current candle is bearish
-            (self.df['open'] >= df_prev['close']) &  # Current open above previous close
-            (self.df['close'] <= df_prev['open'])    # Current close below previous open
-        )
-        
-        # Add trend context
-        uptrend_context = self.df['uptrend'].shift(1)
-        bearish_engulfing_valid = bearish_engulfing_condition & uptrend_context
-        
-        return {
-            'bullish_engulfing': bullish_engulfing_valid,
-            'bearish_engulfing': bearish_engulfing_valid
-        }
+        try:
+            # Calculate if each candle is bullish (close > open)
+            self.df['is_bullish'] = self.df['close'] > self.df['open']
+            
+            # Calculate candle body size
+            self.df['body_size'] = abs(self.df['close'] - self.df['open'])
+            
+            # For bullish engulfing:
+            # 1. Current candle is bullish
+            # 2. Previous candle is bearish
+            # 3. Current candle's body engulfs previous candle's body
+            
+            # FIX: Use logical negation with .astype(bool) instead of bitwise NOT (~)
+            bullish_engulfing = (
+                self.df['is_bullish'] &  # Current candle is bullish
+                (~self.df['is_bullish'].shift(1)).astype(bool) &  # Previous candle is bearish (fixed)
+                (self.df['body_size'] > self.df['body_size'].shift(1)) &  # Current body bigger than previous
+                (self.df['open'] < self.df['close'].shift(1)) &  # Current open below previous close
+                (self.df['close'] > self.df['open'].shift(1))  # Current close above previous open
+            )
+            
+            # For bearish engulfing:
+            # 1. Current candle is bearish
+            # 2. Previous candle is bullish
+            # 3. Current candle's body engulfs previous candle's body
+            
+            # FIX: Use logical negation with .astype(bool) instead of bitwise NOT (~)
+            bearish_engulfing = (
+                (~self.df['is_bullish']).astype(bool) &  # Current candle is bearish (fixed)
+                self.df['is_bullish'].shift(1) &  # Previous candle is bullish
+                (self.df['body_size'] > self.df['body_size'].shift(1)) &  # Current body bigger than previous
+                (self.df['open'] > self.df['close'].shift(1)) &  # Current open above previous close
+                (self.df['close'] < self.df['open'].shift(1))  # Current close below previous open
+            )
+            
+            return {
+                'bullish_engulfing': bullish_engulfing,
+                'bearish_engulfing': bearish_engulfing
+            }
+        except Exception as e:
+            self.logger.warning(f"Error calculating engulfing patterns: {str(e)}")
+            return {
+                'bullish_engulfing': pd.Series(False, index=self.df.index),
+                'bearish_engulfing': pd.Series(False, index=self.df.index)
+            }
     
     def detect_harami(self):
         """
