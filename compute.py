@@ -596,7 +596,7 @@ class UpstoxClient:
         
         Args:
             instrument_key: Instrument identifier
-            interval: Time interval (1D, 1W, etc.)
+            interval: Time interval (day, 1W, etc.)
             from_date: Start date (YYYY-MM-DD)
             to_date: End date (YYYY-MM-DD)
         
@@ -6234,13 +6234,13 @@ class TradingSignalBot:
         
         self.logger.info("Trading Signal Bot initialized successfully")
     
-    async def get_historical_data(self, instrument_key, interval="1D", days=60):
+    async def get_historical_data(self, instrument_key, interval="day", days=60):
         """
         Fetch historical OHLCV data from Upstox
         
         Args:
             instrument_key: Instrument identifier
-            interval: Time interval (1D, 1W, etc.)
+            interval: Time interval (day, 1W, etc.)
             days: Number of days of history to fetch
             
         Returns:
