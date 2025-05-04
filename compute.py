@@ -495,7 +495,9 @@ import requests
 import json
 import pandas as pd
 import logging
-from upstox_client import ApiClient, LoginApi, MarketQuoteApi
+from upstox_client.api_client import ApiClient
+from upstox_client.api.login_api import LoginApi
+from upstox_client.api.market_quote_api import MarketQuoteApi
 import config 
 
 logger = logging.getLogger(__name__)
