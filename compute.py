@@ -2020,6 +2020,30 @@ class TechnicalIndicators:
     
     def calculate_moving_averages(self):
         """Calculate Simple and Exponential Moving Averages"""
+        # First check if 'close' column exists - add debugging
+        if 'close' not in self.df.columns:
+            # Check if it exists with different capitalization
+            close_col = None
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    close_col = col
+                    break
+                    
+            if close_col:
+                # Copy the column with correct name
+                self.df['close'] = self.df[close_col]
+            else:
+                # Handle the error
+                error_msg = f"'close' column not found! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['moving_averages'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+        
         # Get parameters for moving averages
         sma_periods = self.params.get_indicator_param('sma_periods')
         ema_periods = self.params.get_indicator_param('ema_periods')
@@ -2071,19 +2095,23 @@ class TechnicalIndicators:
                                  (temp_df[mid_term] < temp_df[long_term])).astype(int)
         
         # Determine overall trend direction
+        # Ensure 'close' exists in temp_df
+        temp_df['close'] = self.df['close']
+        
         new_cols['uptrend'] = ((temp_df['close'] > temp_df[mid_term]) & 
                              (temp_df[mid_term] > temp_df[long_term])).astype(int)
         
         new_cols['downtrend'] = ((temp_df['close'] < temp_df[mid_term]) & 
                                (temp_df[mid_term] < temp_df[long_term])).astype(int)
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # FIX FOR FRAGMENTATION: Add all columns at once using concat instead of individual assignments
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
+        signal_name = ""
         
         # Check for fresh EMA crossover
         if self.df['ema_buy_signal'].iloc[-1] == 1:
