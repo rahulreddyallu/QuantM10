@@ -736,131 +736,199 @@ class UpstoxClient:
 # ===============================================================
 # Candlestick Pattern Recognition
 # ===============================================================
+import pandas as pd
+import numpy as np
+import logging
+from typing import Dict, Optional
+
 class CandlestickPatterns:
     """Complete candlestick pattern detection with precise validation criteria"""
     
-    def __init__(self, df, params=None):
+    def __init__(self, df, params=None, logger=None):
         """
         Initialize with DataFrame containing OHLCV data
         
         Args:
             df: DataFrame with OHLCV data
             params: Optional TradingParameters instance for pattern thresholds
+            logger: Optional logger instance (will create one if not provided)
         """
+        # Initialize logger first so it's available for all methods
+        self.logger = logger
+        if self.logger is None:
+            self.logger = logging.getLogger('candlestick_patterns')
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+            handler.setFormatter(formatter)
+            self.logger.addHandler(handler)
+            self.logger.setLevel(logging.INFO)
+        
         # Ensure we have a valid DataFrame
         if df is None or len(df) == 0:
+            self.logger.warning("Empty DataFrame provided")
             raise ValueError("Empty DataFrame provided")
             
         # Make a deep copy to avoid modifying the original
         self.df = df.copy()
         
         # Initialize parameters (use defaults if not provided)
-        self.params = params or TradingParameters()
+        self.params = params or self._default_params()
         
-        # Calculate body sizes and shadows for all candles
-        self._calculate_candle_dimensions()
-        
-        # Calculate trends for context
-        self._calculate_trend_context()
+        try:
+            # Calculate body sizes and shadows for all candles
+            self._calculate_candle_dimensions()
+            
+            # Calculate trends for context
+            self._calculate_trend_context()
+        except Exception as e:
+            self.logger.error(f"Error during initialization: {str(e)}")
+    
+    def _default_params(self):
+        """Create default parameters for pattern detection"""
+        return {
+            'get_pattern_param': lambda x: {
+                'doji_body_threshold': 0.1,
+                'spinning_top_body_threshold': 0.3,
+                'spinning_top_shadow_threshold': 0.2,
+                'marubozu_shadow_threshold': 0.05,
+                'marubozu_body_pct': 0.95,
+                'umbrella_lower_shadow_ratio': 2.0,
+                'umbrella_upper_shadow_threshold': 0.1,
+                'hammer_lower_shadow_ratio': 2.0,
+                'hammer_upper_shadow_threshold': 0.1,
+                'harami_body_size_ratio': 0.6,
+                'star_body_size_threshold': 0.3,
+                'three_candle_trend_threshold': 0.01
+            }.get(x, 0.1),
+            'get_indicator_param': lambda x: {
+                'high_volume_threshold': 1.5
+            }.get(x, 1.0),
+            'get_signal_param': lambda x: {
+                'pattern_strength_weights': {
+                    'bullish_engulfing': 3,
+                    'bearish_engulfing': 3,
+                    'hammer': 2,
+                    'hanging_man': 2,
+                    'morning_star': 3,
+                    'evening_star': 3
+                }
+            }.get(x, {})
+        }
     
     def _calculate_candle_dimensions(self):
         """
         Calculate candle body, upper shadow, and lower shadow sizes using vectorized operations
         """
-        # Get body size and direction
-        self.df['body_size'] = abs(self.df['close'] - self.df['open'])
-        self.df['candle_range'] = self.df['high'] - self.df['low']
-        
-        # Avoid division by zero with where
-        self.df['body_pct'] = np.where(
-            self.df['candle_range'] > 0,
-            self.df['body_size'] / self.df['candle_range'],
-            0
-        )
-        
-        self.df['is_bullish'] = self.df['close'] > self.df['open']
-        
-        # Calculate shadows using vectorized operations
-        # For bullish candles: Upper shadow = High - Close, Lower shadow = Open - Low
-        # For bearish candles: Upper shadow = High - Open, Lower shadow = Close - Low
-        self.df['upper_shadow'] = np.where(
-            self.df['is_bullish'],
-            self.df['high'] - self.df['close'],
-            self.df['high'] - self.df['open']
-        )
-        
-        self.df['lower_shadow'] = np.where(
-            self.df['is_bullish'],
-            self.df['open'] - self.df['low'],
-            self.df['close'] - self.df['low']
-        )
-        
-        # Calculate shadow percentages relative to range (avoid division by zero)
-        self.df['upper_shadow_pct'] = np.where(
-            self.df['candle_range'] > 0,
-            self.df['upper_shadow'] / self.df['candle_range'],
-            0
-        )
-        
-        self.df['lower_shadow_pct'] = np.where(
-            self.df['candle_range'] > 0,
-            self.df['lower_shadow'] / self.df['candle_range'],
-            0
-        )
-        
-        # Handle volume analysis
-        if 'volume' in self.df.columns:
-            # Calculate volume moving average
-            self.df['volume_ma20'] = self.df['volume'].rolling(window=20).mean()
+        try:
+            # Get body size and direction
+            self.df['body_size'] = abs(self.df['close'] - self.df['open'])
+            self.df['candle_range'] = self.df['high'] - self.df['low']
             
-            # Flag high volume candles (50% above average)
-            high_volume_threshold = self.params.get_indicator_param('high_volume_threshold')
-            self.df['high_volume'] = self.df['volume'] > (self.df['volume_ma20'] * high_volume_threshold)
-            
-            # Calculate volume ratio to average (avoid division by zero)
-            self.df['volume_ratio'] = np.where(
-                self.df['volume_ma20'] > 0,
-                self.df['volume'] / self.df['volume_ma20'],
+            # Avoid division by zero with where
+            self.df['body_pct'] = np.where(
+                self.df['candle_range'] > 0,
+                self.df['body_size'] / self.df['candle_range'],
                 0
             )
+            
+            self.df['is_bullish'] = self.df['close'] > self.df['open']
+            self.df['is_bearish'] = self.df['close'] <= self.df['open']  # Use <= to ensure complete coverage
+            
+            # Calculate shadows using vectorized operations
+            # For bullish candles: Upper shadow = High - Close, Lower shadow = Open - Low
+            # For bearish candles: Upper shadow = High - Open, Lower shadow = Close - Low
+            self.df['upper_shadow'] = np.where(
+                self.df['is_bullish'],
+                self.df['high'] - self.df['close'],
+                self.df['high'] - self.df['open']
+            )
+            
+            self.df['lower_shadow'] = np.where(
+                self.df['is_bullish'],
+                self.df['open'] - self.df['low'],
+                self.df['close'] - self.df['low']
+            )
+            
+            # Calculate shadow percentages relative to range (avoid division by zero)
+            self.df['upper_shadow_pct'] = np.where(
+                self.df['candle_range'] > 0,
+                self.df['upper_shadow'] / self.df['candle_range'],
+                0
+            )
+            
+            self.df['lower_shadow_pct'] = np.where(
+                self.df['candle_range'] > 0,
+                self.df['lower_shadow'] / self.df['candle_range'],
+                0
+            )
+            
+            # Handle volume analysis
+            if 'volume' in self.df.columns:
+                # Calculate volume moving average
+                self.df['volume_ma20'] = self.df['volume'].rolling(window=20).mean()
+                
+                # Flag high volume candles (50% above average)
+                high_volume_threshold = self.params['get_indicator_param']('high_volume_threshold')
+                self.df['high_volume'] = self.df['volume'] > (self.df['volume_ma20'] * high_volume_threshold)
+                
+                # Calculate volume ratio to average (avoid division by zero)
+                self.df['volume_ratio'] = np.where(
+                    self.df['volume_ma20'] > 0,
+                    self.df['volume'] / self.df['volume_ma20'],
+                    0
+                )
+        except Exception as e:
+            self.logger.error(f"Error in _calculate_candle_dimensions: {str(e)}")
+            raise
     
     def _calculate_trend_context(self):
         """
         Calculate trend indicators for pattern context with volume confirmation using vectorized operations
         """
-        # Short-term trend (5-day)
-        self.df['ma5'] = self.df['close'].rolling(window=5).mean()
-        
-        # Medium-term trend (20-day)
-        self.df['ma20'] = self.df['close'].rolling(window=20).mean()
-        
-        # Basic trend determination (vectorized)
-        price_uptrend = (self.df['ma5'] > self.df['ma5'].shift(3)) & (self.df['close'] > self.df['ma20'])
-        price_downtrend = (self.df['ma5'] < self.df['ma5'].shift(3)) & (self.df['close'] < self.df['ma20'])
-        
-        # Volume confirmation if available
-        if 'volume' in self.df.columns:
-            # Calculate volume trend (increasing or decreasing volume)
-            self.df['volume_ma5'] = self.df['volume'].rolling(window=5).mean()
-            volume_increasing = self.df['volume_ma5'] > self.df['volume_ma5'].shift(3)
+        try:
+            # Short-term trend (5-day)
+            self.df['ma5'] = self.df['close'].rolling(window=5).mean()
             
-            # Strong uptrend: Price rising with increasing volume (vectorized condition)
-            self.df['uptrend'] = price_uptrend & (
-                volume_increasing | 
-                # Or high volume on up days
-                (self.df['high_volume'] & self.df['is_bullish'])
+            # Medium-term trend (20-day)
+            self.df['ma20'] = self.df['close'].rolling(window=20).mean()
+            
+            # Basic trend determination (vectorized)
+            price_uptrend = (
+                (self.df['ma5'] > self.df['ma5'].shift(3)) & 
+                (self.df['close'] > self.df['ma20'])
             )
             
-            # Strong downtrend: Price falling with increasing volume (vectorized condition)
-            self.df['downtrend'] = price_downtrend & (
-                volume_increasing | 
-                # Or high volume on down days
-                (self.df['high_volume'] & ~self.df['is_bullish'])
+            price_downtrend = (
+                (self.df['ma5'] < self.df['ma5'].shift(3)) & 
+                (self.df['close'] < self.df['ma20'])
             )
-        else:
-            # If no volume data, use just price
-            self.df['uptrend'] = price_uptrend
-            self.df['downtrend'] = price_downtrend
+            
+            # Volume confirmation if available
+            if 'volume' in self.df.columns:
+                # Calculate volume trend (increasing or decreasing volume)
+                self.df['volume_ma5'] = self.df['volume'].rolling(window=5).mean()
+                volume_increasing = self.df['volume_ma5'] > self.df['volume_ma5'].shift(3)
+                
+                # Strong uptrend: Price rising with increasing volume (vectorized condition)
+                self.df['uptrend'] = price_uptrend & (
+                    volume_increasing | 
+                    # Or high volume on up days
+                    (self.df['high_volume'] & self.df['is_bullish'])
+                )
+                
+                # Strong downtrend: Price falling with increasing volume (vectorized condition)
+                self.df['downtrend'] = price_downtrend & (
+                    volume_increasing | 
+                    # Or high volume on down days
+                    (self.df['high_volume'] & self.df['is_bearish'])  # Use is_bearish instead of ~is_bullish
+                )
+            else:
+                # If no volume data, use just price
+                self.df['uptrend'] = price_uptrend
+                self.df['downtrend'] = price_downtrend
+        except Exception as e:
+            self.logger.error(f"Error in _calculate_trend_context: {str(e)}")
+            raise
     
     def detect_marubozu(self):
         """
@@ -869,38 +937,46 @@ class CandlestickPatterns:
         Returns:
             Dictionary with detected patterns and their indices
         """
-        # Ensure we have data
-        if len(self.df) == 0:
-            return {'marubozu': pd.Series(dtype=bool), 
-                    'bullish_marubozu': pd.Series(dtype=bool), 
-                    'bearish_marubozu': pd.Series(dtype=bool)}
+        try:
+            # Ensure we have data
+            if len(self.df) == 0:
+                return {'marubozu': pd.Series(dtype=bool), 
+                        'bullish_marubozu': pd.Series(dtype=bool), 
+                        'bearish_marubozu': pd.Series(dtype=bool)}
+                
+            # Get parameters from config
+            shadow_threshold = self.params['get_pattern_param']('marubozu_shadow_threshold')
+            body_pct_threshold = self.params['get_pattern_param']('marubozu_body_pct')
             
-        # Get parameters from config
-        shadow_threshold = self.params.get_pattern_param('marubozu_shadow_threshold')
-        body_pct_threshold = self.params.get_pattern_param('marubozu_body_pct')
-        
-        # Detect Bullish Marubozu (vectorized)
-        bullish_marubozu = (
-            (self.df['is_bullish']) &
-            (self.df['upper_shadow_pct'] <= shadow_threshold) &
-            (self.df['lower_shadow_pct'] <= shadow_threshold) &
-            (self.df['body_pct'] >= body_pct_threshold)  # Body is at least 95% of range
-        )
-        
-        # Detect Bearish Marubozu (vectorized)
-        bearish_marubozu = (
-            (~self.df['is_bullish']) &
-            (self.df['upper_shadow_pct'] <= shadow_threshold) &
-            (self.df['lower_shadow_pct'] <= shadow_threshold) &
-            (self.df['body_pct'] >= body_pct_threshold)  # Body is at least 95% of range
-        )
-        
-        # Combine results
-        return {
-            'marubozu': bullish_marubozu | bearish_marubozu,
-            'bullish_marubozu': bullish_marubozu,
-            'bearish_marubozu': bearish_marubozu
-        }
+            # Detect Bullish Marubozu (vectorized)
+            bullish_marubozu = (
+                (self.df['is_bullish']) &
+                (self.df['upper_shadow_pct'] <= shadow_threshold) &
+                (self.df['lower_shadow_pct'] <= shadow_threshold) &
+                (self.df['body_pct'] >= body_pct_threshold)  # Body is at least 95% of range
+            )
+            
+            # Detect Bearish Marubozu (vectorized)
+            bearish_marubozu = (
+                (self.df['is_bearish']) &  # Use is_bearish instead of ~is_bullish
+                (self.df['upper_shadow_pct'] <= shadow_threshold) &
+                (self.df['lower_shadow_pct'] <= shadow_threshold) &
+                (self.df['body_pct'] >= body_pct_threshold)  # Body is at least 95% of range
+            )
+            
+            # Combine results
+            return {
+                'marubozu': bullish_marubozu | bearish_marubozu,
+                'bullish_marubozu': bullish_marubozu,
+                'bearish_marubozu': bearish_marubozu
+            }
+        except Exception as e:
+            self.logger.warning(f"Error detecting marubozu patterns: {str(e)}")
+            return {
+                'marubozu': pd.Series(False, index=self.df.index), 
+                'bullish_marubozu': pd.Series(False, index=self.df.index), 
+                'bearish_marubozu': pd.Series(False, index=self.df.index)
+            }
     
     def detect_doji(self):
         """
@@ -909,20 +985,24 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Doji patterns are detected
         """
-        # Ensure we have data
-        if len(self.df) == 0:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data
+            if len(self.df) == 0:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameter from config
+            body_threshold = self.params['get_pattern_param']('doji_body_threshold')
             
-        # Get parameter from config
-        body_threshold = self.params.get_pattern_param('doji_body_threshold')
-        
-        # Doji criteria: open and close are virtually equal (vectorized)
-        doji = (
-            (self.df['body_pct'] <= body_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        return doji
+            # Doji criteria: open and close are virtually equal (vectorized)
+            doji = (
+                (self.df['body_pct'] <= body_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            return doji.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting doji patterns: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_spinning_tops(self):
         """
@@ -931,23 +1011,27 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Spinning Tops are detected
         """
-        # Ensure we have data
-        if len(self.df) == 0:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data
+            if len(self.df) == 0:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameters from config
+            body_threshold = self.params['get_pattern_param']('spinning_top_body_threshold')
+            shadow_threshold = self.params['get_pattern_param']('spinning_top_shadow_threshold')
             
-        # Get parameters from config
-        body_threshold = self.params.get_pattern_param('spinning_top_body_threshold')
-        shadow_threshold = self.params.get_pattern_param('spinning_top_shadow_threshold')
-        
-        # Spinning Top criteria (vectorized)
-        spinning_tops = (
-            (self.df['body_pct'] <= body_threshold) &
-            (self.df['upper_shadow_pct'] >= shadow_threshold) &
-            (self.df['lower_shadow_pct'] >= shadow_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        return spinning_tops
+            # Spinning Top criteria (vectorized)
+            spinning_tops = (
+                (self.df['body_pct'] <= body_threshold) &
+                (self.df['upper_shadow_pct'] >= shadow_threshold) &
+                (self.df['lower_shadow_pct'] >= shadow_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            return spinning_tops.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting spinning tops: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_paper_umbrella(self):
         """
@@ -956,22 +1040,26 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Paper Umbrella patterns are detected
         """
-        # Ensure we have data
-        if len(self.df) == 0:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data
+            if len(self.df) == 0:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameters from config
+            lower_shadow_ratio = self.params['get_pattern_param']('umbrella_lower_shadow_ratio')
+            upper_shadow_threshold = self.params['get_pattern_param']('umbrella_upper_shadow_threshold')
             
-        # Get parameters from config
-        lower_shadow_ratio = self.params.get_pattern_param('umbrella_lower_shadow_ratio')
-        upper_shadow_threshold = self.params.get_pattern_param('umbrella_upper_shadow_threshold')
-        
-        # Paper Umbrella criteria (vectorized)
-        paper_umbrella = (
-            (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
-            (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        return paper_umbrella
+            # Paper Umbrella criteria (vectorized)
+            paper_umbrella = (
+                (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
+                (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            return paper_umbrella.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting paper umbrella patterns: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_hammer(self):
         """
@@ -980,28 +1068,32 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Hammer patterns are detected
         """
-        # Ensure we have data and sufficient history
-        if len(self.df) < 5:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data and sufficient history
+            if len(self.df) < 5:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameters from config
+            lower_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')
+            upper_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
             
-        # Get parameters from config
-        lower_shadow_ratio = self.params.get_pattern_param('hammer_lower_shadow_ratio')
-        upper_shadow_threshold = self.params.get_pattern_param('hammer_upper_shadow_threshold')
-        
-        # Detect hammer candle structure (vectorized)
-        hammer_structure = (
-            (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
-            (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        # Check for prior downtrend
-        downtrend_context = self.df['downtrend'].shift(1)
-        
-        # Combine conditions
-        hammer = hammer_structure & downtrend_context
-        
-        return hammer
+            # Detect hammer candle structure (vectorized)
+            hammer_structure = (
+                (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
+                (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            # Check for prior downtrend
+            downtrend_context = self.df['downtrend'].shift(1)
+            
+            # Combine conditions
+            hammer = hammer_structure & downtrend_context
+            
+            return hammer.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting hammer patterns: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_hanging_man(self):
         """
@@ -1010,28 +1102,32 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Hanging Man patterns are detected
         """
-        # Ensure we have data and sufficient history
-        if len(self.df) < 5:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data and sufficient history
+            if len(self.df) < 5:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameters from config - using same as hammer since structure is similar
+            lower_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')
+            upper_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
             
-        # Get parameters from config - using same as hammer since structure is similar
-        lower_shadow_ratio = self.params.get_pattern_param('hammer_lower_shadow_ratio')
-        upper_shadow_threshold = self.params.get_pattern_param('hammer_upper_shadow_threshold')
-        
-        # Detect hanging man candle structure (same as hammer, vectorized)
-        hanging_man_structure = (
-            (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
-            (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        # Check for prior uptrend
-        uptrend_context = self.df['uptrend'].shift(1)
-        
-        # Combine conditions
-        hanging_man = hanging_man_structure & uptrend_context
-        
-        return hanging_man
+            # Detect hanging man candle structure (same as hammer, vectorized)
+            hanging_man_structure = (
+                (self.df['lower_shadow'] >= (self.df['body_size'] * lower_shadow_ratio)) &
+                (self.df['upper_shadow_pct'] <= upper_shadow_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            # Check for prior uptrend
+            uptrend_context = self.df['uptrend'].shift(1)
+            
+            # Combine conditions
+            hanging_man = hanging_man_structure & uptrend_context
+            
+            return hanging_man.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting hanging man patterns: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_shooting_star(self):
         """
@@ -1040,29 +1136,33 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Shooting Star patterns are detected
         """
-        # Ensure we have data and sufficient history
-        if len(self.df) < 5:
-            return pd.Series(False, index=self.df.index)
+        try:
+            # Ensure we have data and sufficient history
+            if len(self.df) < 5:
+                return pd.Series(False, index=self.df.index)
+                
+            # Get parameters from config
+            # Using same ratio as hammer but for upper shadow
+            upper_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')  
+            lower_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
             
-        # Get parameters from config
-        # Using same ratio as hammer but for upper shadow
-        upper_shadow_ratio = self.params.get_pattern_param('hammer_lower_shadow_ratio')  
-        lower_shadow_threshold = self.params.get_pattern_param('hammer_upper_shadow_threshold')
-        
-        # Detect shooting star candle structure (vectorized)
-        shooting_star_structure = (
-            (self.df['upper_shadow'] >= (self.df['body_size'] * upper_shadow_ratio)) &
-            (self.df['lower_shadow_pct'] <= lower_shadow_threshold) &
-            (self.df['candle_range'] > 0)  # Ensure there is some trading range
-        )
-        
-        # Check for prior uptrend
-        uptrend_context = self.df['uptrend'].shift(1)
-        
-        # Combine conditions
-        shooting_star = shooting_star_structure & uptrend_context
-        
-        return shooting_star
+            # Detect shooting star candle structure (vectorized)
+            shooting_star_structure = (
+                (self.df['upper_shadow'] >= (self.df['body_size'] * upper_shadow_ratio)) &
+                (self.df['lower_shadow_pct'] <= lower_shadow_threshold) &
+                (self.df['candle_range'] > 0)  # Ensure there is some trading range
+            )
+            
+            # Check for prior uptrend
+            uptrend_context = self.df['uptrend'].shift(1)
+            
+            # Combine conditions
+            shooting_star = shooting_star_structure & uptrend_context
+            
+            return shooting_star.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting shooting star patterns: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_engulfing(self):
         """
@@ -1075,21 +1175,21 @@ class CandlestickPatterns:
         a larger bearish candle that completely "engulfs" the previous candle.
         """
         try:
-            # Calculate if each candle is bullish (close > open)
-            self.df['is_bullish'] = self.df['close'] > self.df['open']
-            
-            # Calculate candle body size
-            self.df['body_size'] = abs(self.df['close'] - self.df['open'])
-            
+            if len(self.df) < 2:
+                return {
+                    'bullish_engulfing': pd.Series(False, index=self.df.index),
+                    'bearish_engulfing': pd.Series(False, index=self.df.index)
+                }
+                
             # For bullish engulfing:
             # 1. Current candle is bullish
             # 2. Previous candle is bearish
             # 3. Current candle's body engulfs previous candle's body
             
-            # FIX: Use logical negation with .astype(bool) instead of bitwise NOT (~)
+            # SAFE: Use regular comparison instead of bitwise NOT
             bullish_engulfing = (
                 self.df['is_bullish'] &  # Current candle is bullish
-                (~self.df['is_bullish'].shift(1)).astype(bool) &  # Previous candle is bearish (fixed)
+                (self.df['is_bullish'].shift(1) == False) &  # Previous candle is bearish (fixed)
                 (self.df['body_size'] > self.df['body_size'].shift(1)) &  # Current body bigger than previous
                 (self.df['open'] < self.df['close'].shift(1)) &  # Current open below previous close
                 (self.df['close'] > self.df['open'].shift(1))  # Current close above previous open
@@ -1100,14 +1200,18 @@ class CandlestickPatterns:
             # 2. Previous candle is bullish
             # 3. Current candle's body engulfs previous candle's body
             
-            # FIX: Use logical negation with .astype(bool) instead of bitwise NOT (~)
+            # SAFE: Use regular comparison instead of bitwise NOT
             bearish_engulfing = (
-                (~self.df['is_bullish']).astype(bool) &  # Current candle is bearish (fixed)
+                (self.df['is_bullish'] == False) &  # Current candle is bearish (fixed)
                 self.df['is_bullish'].shift(1) &  # Previous candle is bullish
                 (self.df['body_size'] > self.df['body_size'].shift(1)) &  # Current body bigger than previous
                 (self.df['open'] > self.df['close'].shift(1)) &  # Current open above previous close
                 (self.df['close'] < self.df['open'].shift(1))  # Current close below previous open
             )
+            
+            # Fill NaN values that might be from shifting
+            bullish_engulfing = bullish_engulfing.fillna(False)
+            bearish_engulfing = bearish_engulfing.fillna(False)
             
             return {
                 'bullish_engulfing': bullish_engulfing,
@@ -1127,54 +1231,65 @@ class CandlestickPatterns:
         Returns:
             Dictionary with bullish_harami and bearish_harami Series
         """
-        # Initialize result Series with index from self.df
-        bullish_harami = pd.Series(False, index=self.df.index)
-        bearish_harami = pd.Series(False, index=self.df.index)
-        
-        # We need at least 2 candles to detect harami patterns
-        if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
-            return {'bullish_harami': bullish_harami, 'bearish_harami': bearish_harami}
-        
-        # Create shifted dataframes for comparison
-        df_prev = self.df.shift(1)
-        
-        # Get harami body size ratio parameter
-        harami_body_size_ratio = self.params.get_pattern_param('harami_body_size_ratio')
-        
-        # Bullish Harami (vectorized)
-        bullish_harami_condition = (
-            ~df_prev['is_bullish'] &  # Previous candle is bearish
-            self.df['is_bullish'] &   # Current candle is bullish
-            (self.df['open'] > df_prev['close']) &  # Current open inside previous body
-            (self.df['open'] < df_prev['open']) &
-            (self.df['close'] > df_prev['close']) &  # Current close inside previous body
-            (self.df['close'] < df_prev['open']) &
-            (self.df['body_size'] < df_prev['body_size'] * harami_body_size_ratio)  # Current body smaller than previous
-        )
-        
-        # Add trend context
-        downtrend_context = self.df['downtrend'].shift(1)
-        bullish_harami_valid = bullish_harami_condition & downtrend_context
-        
-        # Bearish Harami (vectorized)
-        bearish_harami_condition = (
-            df_prev['is_bullish'] &    # Previous candle is bullish
-            ~self.df['is_bullish'] &   # Current candle is bearish
-            (self.df['open'] < df_prev['close']) &  # Current open inside previous body
-            (self.df['open'] > df_prev['open']) &
-            (self.df['close'] < df_prev['close']) &  # Current close inside previous body
-            (self.df['close'] > df_prev['open']) &
-            (self.df['body_size'] < df_prev['body_size'] * harami_body_size_ratio)  # Current body smaller than previous
-        )
-        
-        # Add trend context
-        uptrend_context = self.df['uptrend'].shift(1)
-        bearish_harami_valid = bearish_harami_condition & uptrend_context
-        
-        return {
-            'bullish_harami': bullish_harami_valid,
-            'bearish_harami': bearish_harami_valid
-        }
+        try:
+            # Initialize result Series with index from self.df
+            bullish_harami = pd.Series(False, index=self.df.index)
+            bearish_harami = pd.Series(False, index=self.df.index)
+            
+            # We need at least 2 candles to detect harami patterns
+            if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
+                return {'bullish_harami': bullish_harami, 'bearish_harami': bearish_harami}
+            
+            # Create shifted dataframes for comparison
+            df_prev = self.df.shift(1)
+            
+            # Get harami body size ratio parameter
+            harami_body_size_ratio = self.params['get_pattern_param']('harami_body_size_ratio')
+            
+            # Bullish Harami (vectorized) - USE COMPARISON INSTEAD OF BITWISE NOT
+            bullish_harami_condition = (
+                (df_prev['is_bullish'] == False) &  # Previous candle is bearish
+                self.df['is_bullish'] &   # Current candle is bullish
+                (self.df['open'] > df_prev['close']) &  # Current open inside previous body
+                (self.df['open'] < df_prev['open']) &
+                (self.df['close'] > df_prev['close']) &  # Current close inside previous body
+                (self.df['close'] < df_prev['open']) &
+                (self.df['body_size'] < df_prev['body_size'] * harami_body_size_ratio)  # Current body smaller than previous
+            )
+            
+            # Add trend context
+            downtrend_context = self.df['downtrend'].shift(1)
+            bullish_harami_valid = bullish_harami_condition & downtrend_context
+            
+            # Bearish Harami (vectorized) - USE COMPARISON INSTEAD OF BITWISE NOT
+            bearish_harami_condition = (
+                df_prev['is_bullish'] &    # Previous candle is bullish
+                (self.df['is_bullish'] == False) &   # Current candle is bearish
+                (self.df['open'] < df_prev['close']) &  # Current open inside previous body
+                (self.df['open'] > df_prev['open']) &
+                (self.df['close'] < df_prev['close']) &  # Current close inside previous body
+                (self.df['close'] > df_prev['open']) &
+                (self.df['body_size'] < df_prev['body_size'] * harami_body_size_ratio)  # Current body smaller than previous
+            )
+            
+            # Add trend context
+            uptrend_context = self.df['uptrend'].shift(1)
+            bearish_harami_valid = bearish_harami_condition & uptrend_context
+            
+            # Fill NaN values
+            bearish_harami_valid = bearish_harami_valid.fillna(False)
+            bullish_harami_valid = bullish_harami_valid.fillna(False)
+            
+            return {
+                'bullish_harami': bullish_harami_valid,
+                'bearish_harami': bearish_harami_valid
+            }
+        except Exception as e:
+            self.logger.warning(f"Error detecting harami patterns: {str(e)}")
+            return {
+                'bullish_harami': pd.Series(False, index=self.df.index),
+                'bearish_harami': pd.Series(False, index=self.df.index)
+            }
     
     def detect_piercing_pattern(self):
         """
@@ -1183,31 +1298,35 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Piercing Pattern is detected
         """
-        # Initialize result Series with index from self.df
-        piercing_pattern = pd.Series(False, index=self.df.index)
-        
-        # We need at least 2 candles to detect piercing patterns
-        if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
-            return piercing_pattern
-        
-        # Create shifted dataframes for comparison
-        df_prev = self.df.shift(1)
-        
-        # Piercing Pattern (vectorized)
-        piercing_condition = (
-            ~df_prev['is_bullish'] &  # Previous candle is bearish
-            self.df['is_bullish'] &   # Current candle is bullish
-            (df_prev['body_size'] / df_prev['candle_range'] > 0.6) &  # Previous is a long candle
-            (self.df['open'] < df_prev['low']) &  # Gap down opening
-            (self.df['close'] > (df_prev['open'] + df_prev['close']) / 2) &  # Close above midpoint
-            (self.df['close'] < df_prev['open'])  # Not a complete bullish engulfing
-        )
-        
-        # Add trend context
-        downtrend_context = self.df['downtrend'].shift(1)
-        piercing_pattern_valid = piercing_condition & downtrend_context
-        
-        return piercing_pattern_valid
+        try:
+            # Initialize result Series with index from self.df
+            piercing_pattern = pd.Series(False, index=self.df.index)
+            
+            # We need at least 2 candles to detect piercing patterns
+            if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
+                return piercing_pattern
+            
+            # Create shifted dataframes for comparison
+            df_prev = self.df.shift(1)
+            
+            # Piercing Pattern (vectorized) - USE COMPARISON INSTEAD OF BITWISE NOT
+            piercing_condition = (
+                (df_prev['is_bullish'] == False) &  # Previous candle is bearish
+                self.df['is_bullish'] &   # Current candle is bullish
+                (df_prev['body_size'] / df_prev['candle_range'] > 0.6) &  # Previous is a long candle
+                (self.df['open'] < df_prev['low']) &  # Gap down opening
+                (self.df['close'] > (df_prev['open'] + df_prev['close']) / 2) &  # Close above midpoint
+                (self.df['close'] < df_prev['open'])  # Not a complete bullish engulfing
+            )
+            
+            # Add trend context
+            downtrend_context = self.df['downtrend'].shift(1)
+            piercing_pattern_valid = piercing_condition & downtrend_context
+            
+            return piercing_pattern_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting piercing pattern: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_dark_cloud_cover(self):
         """
@@ -1216,111 +1335,119 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Dark Cloud Cover is detected
         """
-        # Initialize result Series with index from self.df
-        dark_cloud_cover = pd.Series(False, index=self.df.index)
-        
-        # We need at least 2 candles to detect dark cloud cover
-        if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
-            return dark_cloud_cover
-        
-        # Create shifted dataframes for comparison
-        df_prev = self.df.shift(1)
-        
-        # Dark Cloud Cover (vectorized)
-        dark_cloud_condition = (
-            df_prev['is_bullish'] &    # Previous candle is bullish
-            ~self.df['is_bullish'] &   # Current candle is bearish
-            (df_prev['body_size'] / df_prev['candle_range'] > 0.6) &  # Previous is a long candle
-            (self.df['open'] > df_prev['high']) &  # Gap up opening
-            (self.df['close'] < (df_prev['open'] + df_prev['close']) / 2) &  # Close below midpoint
-            (self.df['close'] > df_prev['open'])  # Not a complete bearish engulfing
-        )
-        
-        # Add trend context
-        uptrend_context = self.df['uptrend'].shift(1)
-        dark_cloud_cover_valid = dark_cloud_condition & uptrend_context
-        
-        return dark_cloud_cover_valid
+        try:
+            # Initialize result Series with index from self.df
+            dark_cloud_cover = pd.Series(False, index=self.df.index)
+            
+            # We need at least 2 candles to detect dark cloud cover
+            if len(self.df) < 6:  # Need at least 6 candles (5 for trend context + current)
+                return dark_cloud_cover
+            
+            # Create shifted dataframes for comparison
+            df_prev = self.df.shift(1)
+            
+            # Dark Cloud Cover (vectorized) - USE COMPARISON INSTEAD OF BITWISE NOT
+            dark_cloud_condition = (
+                df_prev['is_bullish'] &    # Previous candle is bullish
+                (self.df['is_bullish'] == False) &   # Current candle is bearish
+                (df_prev['body_size'] / df_prev['candle_range'] > 0.6) &  # Previous is a long candle
+                (self.df['open'] > df_prev['high']) &  # Gap up opening
+                (self.df['close'] < (df_prev['open'] + df_prev['close']) / 2) &  # Close below midpoint
+                (self.df['close'] > df_prev['open'])  # Not a complete bearish engulfing
+            )
+            
+            # Add trend context
+            uptrend_context = self.df['uptrend'].shift(1)
+            dark_cloud_cover_valid = dark_cloud_condition & uptrend_context
+            
+            return dark_cloud_cover_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting dark cloud cover: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_morning_star(self):
         """
         Detect Morning Star (bullish reversal pattern)
         
-        Note: This pattern is complex and retains some loop logic but is optimized
-        
         Returns:
             Series with True at indices where Morning Star is detected
         """
-        # Initialize result Series with index from self.df
-        morning_star = pd.Series(False, index=self.df.index)
-        
-        # We need at least 3 candles to detect morning star
-        if len(self.df) < 7:  # Need at least 7 candles (5 for trend context + 2 previous)
-            return morning_star
-        
-        # Get star body size threshold
-        star_body_size_threshold = self.params.get_pattern_param('star_body_size_threshold')
-        
-        # Create shifted dataframes for comparison
-        df_prev1 = self.df.shift(1)  # second day
-        df_prev2 = self.df.shift(2)  # first day
-        
-        # Morning Star conditions (vectorized where possible)
-        condition = (
-            ~df_prev2['is_bullish'] &  # First candle is bearish
-            self.df['is_bullish'] &    # Third candle is bullish
-            (df_prev2['body_size'] / df_prev2['candle_range'] > 0.6) &  # First is a long candle
-            (df_prev1['body_size'] / df_prev1['candle_range'] < star_body_size_threshold) &  # Second has a small body
-            (df_prev1['close'] < df_prev2['close']) &  # Second gaps down from first
-            (self.df['open'] > df_prev1['close']) &  # Third opens above second close
-            (self.df['close'] > (df_prev2['open'] + df_prev2['close']) / 2)  # Third closes above midpoint of first
-        )
-        
-        # Add trend context
-        downtrend_context = self.df['downtrend'].shift(2)
-        morning_star_valid = condition & downtrend_context
-        
-        return morning_star_valid
+        try:
+            # Initialize result Series with index from self.df
+            morning_star = pd.Series(False, index=self.df.index)
+            
+            # We need at least 3 candles to detect morning star
+            if len(self.df) < 7:  # Need at least 7 candles (5 for trend context + 2 previous)
+                return morning_star
+            
+            # Get star body size threshold
+            star_body_size_threshold = self.params['get_pattern_param']('star_body_size_threshold')
+            
+            # Create shifted dataframes for comparison
+            df_prev1 = self.df.shift(1)  # second day
+            df_prev2 = self.df.shift(2)  # first day
+            
+            # Morning Star conditions (vectorized where possible) - USE COMPARISON INSTEAD OF BITWISE NOT
+            condition = (
+                (df_prev2['is_bullish'] == False) &  # First candle is bearish
+                self.df['is_bullish'] &    # Third candle is bullish
+                (df_prev2['body_size'] / df_prev2['candle_range'] > 0.6) &  # First is a long candle
+                (df_prev1['body_size'] / df_prev1['candle_range'] < star_body_size_threshold) &  # Second has a small body
+                (df_prev1['close'] < df_prev2['close']) &  # Second gaps down from first
+                (self.df['open'] > df_prev1['close']) &  # Third opens above second close
+                (self.df['close'] > (df_prev2['open'] + df_prev2['close']) / 2)  # Third closes above midpoint of first
+            )
+            
+            # Add trend context
+            downtrend_context = self.df['downtrend'].shift(2)
+            morning_star_valid = condition & downtrend_context
+            
+            return morning_star_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting morning star: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_evening_star(self):
         """
         Detect Evening Star (bearish reversal pattern)
         
-        Note: This pattern is complex and retains some loop logic but is optimized
-        
         Returns:
             Series with True at indices where Evening Star is detected
         """
-        # Initialize result Series with index from self.df
-        evening_star = pd.Series(False, index=self.df.index)
-        
-        # We need at least 3 candles to detect evening star
-        if len(self.df) < 7:  # Need at least 7 candles (5 for trend context + 2 previous)
-            return evening_star
-        
-        # Get star body size threshold
-        star_body_size_threshold = self.params.get_pattern_param('star_body_size_threshold')
-        
-        # Create shifted dataframes for comparison
-        df_prev1 = self.df.shift(1)  # second day
-        df_prev2 = self.df.shift(2)  # first day
-        
-        # Evening Star conditions (vectorized where possible)
-        condition = (
-            df_prev2['is_bullish'] &    # First candle is bullish
-            ~self.df['is_bullish'] &    # Third candle is bearish
-            (df_prev2['body_size'] / df_prev2['candle_range'] > 0.6) &  # First is a long candle
-            (df_prev1['body_size'] / df_prev1['candle_range'] < star_body_size_threshold) &  # Second has a small body
-            (df_prev1['close'] > df_prev2['close']) &  # Second gaps up from first
-            (self.df['open'] < df_prev1['close']) &  # Third opens below second close
-            (self.df['close'] < (df_prev2['open'] + df_prev2['close']) / 2)  # Third closes below midpoint of first
-        )
-        
-        # Add trend context
-        uptrend_context = self.df['uptrend'].shift(2)
-        evening_star_valid = condition & uptrend_context
-        
-        return evening_star_valid
+        try:
+            # Initialize result Series with index from self.df
+            evening_star = pd.Series(False, index=self.df.index)
+            
+            # We need at least 3 candles to detect evening star
+            if len(self.df) < 7:  # Need at least 7 candles (5 for trend context + 2 previous)
+                return evening_star
+            
+            # Get star body size threshold
+            star_body_size_threshold = self.params['get_pattern_param']('star_body_size_threshold')
+            
+            # Create shifted dataframes for comparison
+            df_prev1 = self.df.shift(1)  # second day
+            df_prev2 = self.df.shift(2)  # first day
+            
+            # Evening Star conditions (vectorized where possible) - USE COMPARISON INSTEAD OF BITWISE NOT
+            condition = (
+                df_prev2['is_bullish'] &    # First candle is bullish
+                (self.df['is_bullish'] == False) &    # Third candle is bearish
+                (df_prev2['body_size'] / df_prev2['candle_range'] > 0.6) &  # First is a long candle
+                (df_prev1['body_size'] / df_prev1['candle_range'] < star_body_size_threshold) &  # Second has a small body
+                (df_prev1['close'] > df_prev2['close']) &  # Second gaps up from first
+                (self.df['open'] < df_prev1['close']) &  # Third opens below second close
+                (self.df['close'] < (df_prev2['open'] + df_prev2['close']) / 2)  # Third closes below midpoint of first
+            )
+            
+            # Add trend context
+            uptrend_context = self.df['uptrend'].shift(2)
+            evening_star_valid = condition & uptrend_context
+            
+            return evening_star_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting evening star: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_three_white_soldiers(self):
         """
@@ -1329,52 +1456,56 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Three White Soldiers is detected
         """
-        # Initialize result Series with index from self.df
-        three_white_soldiers = pd.Series(False, index=self.df.index)
-        
-        # We need at least 3 candles to detect this pattern
-        if len(self.df) < 7:  # Need at least 7 candles (4 for trend context + 3 pattern candles)
-            return three_white_soldiers
-        
-        # Create shifted dataframes for comparison
-        df_prev1 = self.df.shift(1)  # yesterday
-        df_prev2 = self.df.shift(2)  # two days ago
-        
-        # Get Three White Soldiers threshold
-        trend_threshold = self.params.get_pattern_param('three_candle_trend_threshold')
-        
-        # Three White Soldiers conditions
-        condition = (
-            # Each candle is bullish
-            self.df['is_bullish'] & 
-            df_prev1['is_bullish'] & 
-            df_prev2['is_bullish'] &
+        try:
+            # Initialize result Series with index from self.df
+            three_white_soldiers = pd.Series(False, index=self.df.index)
             
-            # Each candle closes higher than the previous
-            (self.df['close'] > df_prev1['close']) &
-            (df_prev1['close'] > df_prev2['close']) &
+            # We need at least 3 candles to detect this pattern
+            if len(self.df) < 7:  # Need at least 7 candles (4 for trend context + 3 pattern candles)
+                return three_white_soldiers
             
-            # Each candle opens within the body of the previous candle
-            (self.df['open'] > df_prev1['open']) &
-            (self.df['open'] < df_prev1['close']) &
-            (df_prev1['open'] > df_prev2['open']) &
-            (df_prev1['open'] < df_prev2['close']) &
+            # Create shifted dataframes for comparison
+            df_prev1 = self.df.shift(1)  # yesterday
+            df_prev2 = self.df.shift(2)  # two days ago
             
-            # Each candle has relatively small upper shadows
-            (self.df['upper_shadow_pct'] < 0.2) &
-            (df_prev1['upper_shadow_pct'] < 0.2) &
-            (df_prev2['upper_shadow_pct'] < 0.2) &
+            # Get Three White Soldiers threshold
+            trend_threshold = self.params['get_pattern_param']('three_candle_trend_threshold')
             
-            # No significant gaps
-            (abs(self.df['open'] - df_prev1['close']) / df_prev1['close'] < trend_threshold) &
-            (abs(df_prev1['open'] - df_prev2['close']) / df_prev2['close'] < trend_threshold)
-        )
-        
-        # Add trend context - should occur after a downtrend
-        downtrend_context = self.df['downtrend'].shift(3)
-        three_white_soldiers_valid = condition & downtrend_context
-        
-        return three_white_soldiers_valid
+            # Three White Soldiers conditions
+            condition = (
+                # Each candle is bullish
+                self.df['is_bullish'] & 
+                df_prev1['is_bullish'] & 
+                df_prev2['is_bullish'] &
+                
+                # Each candle closes higher than the previous
+                (self.df['close'] > df_prev1['close']) &
+                (df_prev1['close'] > df_prev2['close']) &
+                
+                # Each candle opens within the body of the previous candle
+                (self.df['open'] > df_prev1['open']) &
+                (self.df['open'] < df_prev1['close']) &
+                (df_prev1['open'] > df_prev2['open']) &
+                (df_prev1['open'] < df_prev2['close']) &
+                
+                # Each candle has relatively small upper shadows
+                (self.df['upper_shadow_pct'] < 0.2) &
+                (df_prev1['upper_shadow_pct'] < 0.2) &
+                (df_prev2['upper_shadow_pct'] < 0.2) &
+                
+                # No significant gaps
+                (abs(self.df['open'] - df_prev1['close']) / df_prev1['close'] < trend_threshold) &
+                (abs(df_prev1['open'] - df_prev2['close']) / df_prev2['close'] < trend_threshold)
+            )
+            
+            # Add trend context - should occur after a downtrend
+            downtrend_context = self.df['downtrend'].shift(3)
+            three_white_soldiers_valid = condition & downtrend_context
+            
+            return three_white_soldiers_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting three white soldiers: {str(e)}")
+            return pd.Series(False, index=self.df.index)
 
     def detect_three_black_crows(self):
         """
@@ -1383,52 +1514,56 @@ class CandlestickPatterns:
         Returns:
             Series with True at indices where Three Black Crows is detected
         """
-        # Initialize result Series with index from self.df
-        three_black_crows = pd.Series(False, index=self.df.index)
-        
-        # We need at least 3 candles to detect this pattern
-        if len(self.df) < 7:  # Need at least 7 candles (4 for trend context + 3 pattern candles)
-            return three_black_crows
-        
-        # Create shifted dataframes for comparison
-        df_prev1 = self.df.shift(1)  # yesterday
-        df_prev2 = self.df.shift(2)  # two days ago
-        
-        # Get Three Black Crows threshold
-        trend_threshold = self.params.get_pattern_param('three_candle_trend_threshold')
-        
-        # Three Black Crows conditions
-        condition = (
-            # Each candle is bearish
-            ~self.df['is_bullish'] & 
-            ~df_prev1['is_bullish'] & 
-            ~df_prev2['is_bullish'] &
+        try:
+            # Initialize result Series with index from self.df
+            three_black_crows = pd.Series(False, index=self.df.index)
             
-            # Each candle closes lower than the previous
-            (self.df['close'] < df_prev1['close']) &
-            (df_prev1['close'] < df_prev2['close']) &
+            # We need at least 3 candles to detect this pattern
+            if len(self.df) < 7:  # Need at least 7 candles (4 for trend context + 3 pattern candles)
+                return three_black_crows
             
-            # Each candle opens within the body of the previous candle
-            (self.df['open'] < df_prev1['open']) &
-            (self.df['open'] > df_prev1['close']) &
-            (df_prev1['open'] < df_prev2['open']) &
-            (df_prev1['open'] > df_prev2['close']) &
+            # Create shifted dataframes for comparison
+            df_prev1 = self.df.shift(1)  # yesterday
+            df_prev2 = self.df.shift(2)  # two days ago
             
-            # Each candle has relatively small lower shadows
-            (self.df['lower_shadow_pct'] < 0.2) &
-            (df_prev1['lower_shadow_pct'] < 0.2) &
-            (df_prev2['lower_shadow_pct'] < 0.2) &
+            # Get Three Black Crows threshold
+            trend_threshold = self.params['get_pattern_param']('three_candle_trend_threshold')
             
-            # No significant gaps
-            (abs(self.df['open'] - df_prev1['close']) / df_prev1['close'] < trend_threshold) &
-            (abs(df_prev1['open'] - df_prev2['close']) / df_prev2['close'] < trend_threshold)
-        )
-        
-        # Add trend context - should occur after an uptrend
-        uptrend_context = self.df['uptrend'].shift(3)
-        three_black_crows_valid = condition & uptrend_context
-        
-        return three_black_crows_valid
+            # Three Black Crows conditions - USE COMPARISON INSTEAD OF BITWISE NOT
+            condition = (
+                # Each candle is bearish
+                (self.df['is_bullish'] == False) & 
+                (df_prev1['is_bullish'] == False) & 
+                (df_prev2['is_bullish'] == False) &
+                
+                # Each candle closes lower than the previous
+                (self.df['close'] < df_prev1['close']) &
+                (df_prev1['close'] < df_prev2['close']) &
+                
+                # Each candle opens within the body of the previous candle
+                (self.df['open'] < df_prev1['open']) &
+                (self.df['open'] > df_prev1['close']) &
+                (df_prev1['open'] < df_prev2['open']) &
+                (df_prev1['open'] > df_prev2['close']) &
+                
+                # Each candle has relatively small lower shadows
+                (self.df['lower_shadow_pct'] < 0.2) &
+                (df_prev1['lower_shadow_pct'] < 0.2) &
+                (df_prev2['lower_shadow_pct'] < 0.2) &
+                
+                # No significant gaps
+                (abs(self.df['open'] - df_prev1['close']) / df_prev1['close'] < trend_threshold) &
+                (abs(df_prev1['open'] - df_prev2['close']) / df_prev2['close'] < trend_threshold)
+            )
+            
+            # Add trend context - should occur after an uptrend
+            uptrend_context = self.df['uptrend'].shift(3)
+            three_black_crows_valid = condition & uptrend_context
+            
+            return three_black_crows_valid.fillna(False)
+        except Exception as e:
+            self.logger.warning(f"Error detecting three black crows: {str(e)}")
+            return pd.Series(False, index=self.df.index)
     
     def detect_all_patterns(self):
         """
@@ -1437,36 +1572,132 @@ class CandlestickPatterns:
         Returns:
             Dictionary with all detected patterns
         """
-        # Get basic patterns
-        marubozu_patterns = self.detect_marubozu()
-        
-        # Build comprehensive pattern dictionary
-        patterns = {
-            # Single candle patterns
-            'marubozu': marubozu_patterns['marubozu'],
-            'bullish_marubozu': marubozu_patterns['bullish_marubozu'],
-            'bearish_marubozu': marubozu_patterns['bearish_marubozu'],
-            'doji': self.detect_doji(),
-            'spinning_tops': self.detect_spinning_tops(),
-            'paper_umbrella': self.detect_paper_umbrella(),
-            'hammer': self.detect_hammer(),
-            'hanging_man': self.detect_hanging_man(),
-            'shooting_star': self.detect_shooting_star(),
+        try:
+            # Initialize empty patterns dictionary
+            patterns = {}
             
-            # Two-candle patterns
-            **self.detect_engulfing(),  # Adds bullish_engulfing and bearish_engulfing
-            **self.detect_harami(),     # Adds bullish_harami and bearish_harami
-            'piercing_pattern': self.detect_piercing_pattern(),
-            'dark_cloud_cover': self.detect_dark_cloud_cover(),
+            # Get single candle patterns
+            try:
+                marubozu_patterns = self.detect_marubozu()
+                patterns['marubozu'] = marubozu_patterns['marubozu']
+                patterns['bullish_marubozu'] = marubozu_patterns['bullish_marubozu']
+                patterns['bearish_marubozu'] = marubozu_patterns['bearish_marubozu']
+            except Exception as e:
+                self.logger.warning(f"Error detecting marubozu patterns: {str(e)}")
+                patterns['marubozu'] = pd.Series(False, index=self.df.index)
+                patterns['bullish_marubozu'] = pd.Series(False, index=self.df.index)
+                patterns['bearish_marubozu'] = pd.Series(False, index=self.df.index)
             
-            # Multi-candle patterns
-            'morning_star': self.detect_morning_star(),
-            'evening_star': self.detect_evening_star(),
-            'three_white_soldiers': self.detect_three_white_soldiers(),
-            'three_black_crows': self.detect_three_black_crows()
-        }
-        
-        return patterns
+            try:
+                patterns['doji'] = self.detect_doji()
+            except Exception as e:
+                self.logger.warning(f"Error detecting doji: {str(e)}")
+                patterns['doji'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['spinning_tops'] = self.detect_spinning_tops()
+            except Exception as e:
+                self.logger.warning(f"Error detecting spinning tops: {str(e)}")
+                patterns['spinning_tops'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['paper_umbrella'] = self.detect_paper_umbrella()
+            except Exception as e:
+                self.logger.warning(f"Error detecting paper umbrella: {str(e)}")
+                patterns['paper_umbrella'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['hammer'] = self.detect_hammer()
+            except Exception as e:
+                self.logger.warning(f"Error detecting hammer: {str(e)}")
+                patterns['hammer'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['hanging_man'] = self.detect_hanging_man()
+            except Exception as e:
+                self.logger.warning(f"Error detecting hanging man: {str(e)}")
+                patterns['hanging_man'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['shooting_star'] = self.detect_shooting_star()
+            except Exception as e:
+                self.logger.warning(f"Error detecting shooting star: {str(e)}")
+                patterns['shooting_star'] = pd.Series(False, index=self.df.index)
+            
+            # Get two-candle patterns
+            try:
+                engulfing_patterns = self.detect_engulfing()
+                patterns['bullish_engulfing'] = engulfing_patterns['bullish_engulfing'] 
+                patterns['bearish_engulfing'] = engulfing_patterns['bearish_engulfing']
+            except Exception as e:
+                self.logger.warning(f"Error detecting engulfing patterns: {str(e)}")
+                patterns['bullish_engulfing'] = pd.Series(False, index=self.df.index)
+                patterns['bearish_engulfing'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                harami_patterns = self.detect_harami()
+                patterns['bullish_harami'] = harami_patterns['bullish_harami']
+                patterns['bearish_harami'] = harami_patterns['bearish_harami']
+            except Exception as e:
+                self.logger.warning(f"Error detecting harami patterns: {str(e)}")
+                patterns['bullish_harami'] = pd.Series(False, index=self.df.index)
+                patterns['bearish_harami'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['piercing_pattern'] = self.detect_piercing_pattern()
+            except Exception as e:
+                self.logger.warning(f"Error detecting piercing pattern: {str(e)}")
+                patterns['piercing_pattern'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['dark_cloud_cover'] = self.detect_dark_cloud_cover()
+            except Exception as e:
+                self.logger.warning(f"Error detecting dark cloud cover: {str(e)}")
+                patterns['dark_cloud_cover'] = pd.Series(False, index=self.df.index)
+            
+            # Get multi-candle patterns
+            try:
+                patterns['morning_star'] = self.detect_morning_star()
+            except Exception as e:
+                self.logger.warning(f"Error detecting morning star: {str(e)}")
+                patterns['morning_star'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['evening_star'] = self.detect_evening_star()
+            except Exception as e:
+                self.logger.warning(f"Error detecting evening star: {str(e)}")
+                patterns['evening_star'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['three_white_soldiers'] = self.detect_three_white_soldiers()
+            except Exception as e:
+                self.logger.warning(f"Error detecting three white soldiers: {str(e)}")
+                patterns['three_white_soldiers'] = pd.Series(False, index=self.df.index)
+                
+            try:
+                patterns['three_black_crows'] = self.detect_three_black_crows()
+            except Exception as e:
+                self.logger.warning(f"Error detecting three black crows: {str(e)}")
+                patterns['three_black_crows'] = pd.Series(False, index=self.df.index)
+                
+            # Fill NaN values with False
+            for key in patterns:
+                if patterns[key] is not None:
+                    patterns[key] = patterns[key].fillna(False)
+                else:
+                    patterns[key] = pd.Series(False, index=self.df.index)
+            
+            return patterns
+        except Exception as e:
+            self.logger.error(f"Error detecting all patterns: {str(e)}")
+            # Return empty patterns dictionary
+            return {pattern: pd.Series(False, index=self.df.index) for pattern in [
+                'marubozu', 'bullish_marubozu', 'bearish_marubozu',
+                'doji', 'spinning_tops', 'paper_umbrella', 'hammer', 'hanging_man', 'shooting_star',
+                'bullish_engulfing', 'bearish_engulfing', 'bullish_harami', 'bearish_harami',
+                'piercing_pattern', 'dark_cloud_cover', 'morning_star', 'evening_star',
+                'three_white_soldiers', 'three_black_crows'
+            ]}
     
     def get_latest_patterns(self):
         """
@@ -1475,16 +1706,23 @@ class CandlestickPatterns:
         Returns:
             Dictionary of patterns found in the latest candle
         """
-        # Detect all patterns if not already detected
-        all_patterns = self.detect_all_patterns()
-        
-        # Get only patterns at the latest candle
-        latest_patterns = {}
-        for pattern_name, pattern_series in all_patterns.items():
-            if len(pattern_series) > 0 and pattern_series.iloc[-1]:
-                latest_patterns[pattern_name] = True
-        
-        return latest_patterns
+        try:
+            # Detect all patterns if not already detected
+            all_patterns = self.detect_all_patterns()
+            
+            # Get only patterns at the latest candle
+            latest_patterns = {}
+            for pattern_name, pattern_series in all_patterns.items():
+                if len(pattern_series) > 0:
+                    # Convert to Python bool to avoid serialization issues
+                    latest_patterns[pattern_name] = bool(pattern_series.iloc[-1])
+                else:
+                    latest_patterns[pattern_name] = False
+            
+            return latest_patterns
+        except Exception as e:
+            self.logger.error(f"Error getting latest patterns: {str(e)}")
+            return {}  # Return empty dict on error
     
     def get_pattern_signals(self):
         """
@@ -1493,53 +1731,65 @@ class CandlestickPatterns:
         Returns:
             Dictionary with buy and sell signals based on detected patterns
         """
-        # Get latest patterns
-        latest_patterns = self.get_latest_patterns()
-        
-        # Define bullish and bearish patterns
-        bullish_patterns = [
-            'bullish_marubozu', 'hammer', 'piercing_pattern',
-            'bullish_engulfing', 'bullish_harami', 'morning_star',
-            'three_white_soldiers'
-        ]
-        
-        bearish_patterns = [
-            'bearish_marubozu', 'hanging_man', 'shooting_star',
-            'dark_cloud_cover', 'bearish_engulfing', 'bearish_harami',
-            'evening_star', 'three_black_crows'
-        ]
-        
-        # Group detected patterns by signal type
-        buy_signals = []
-        sell_signals = []
-        
-        # Get pattern strength weights from parameters
-        pattern_weights = self.params.get_signal_param('pattern_strength_weights')
-        
-        # Check for each bullish pattern
-        for pattern in bullish_patterns:
-            if pattern in latest_patterns:
-                strength = pattern_weights.get(pattern, 1)  # Default strength is 1
-                buy_signals.append({
-                    'pattern': pattern.replace('_', ' ').title(),
-                    'strength': strength
-                })
-        
-        # Check for each bearish pattern
-        for pattern in bearish_patterns:
-            if pattern in latest_patterns:
-                strength = pattern_weights.get(pattern, 1)  # Default strength is 1
-                sell_signals.append({
-                    'pattern': pattern.replace('_', ' ').title(),
-                    'strength': strength
-                })
-        
-        # Return dictionary with buy and sell signals
-        return {
-            'buy': buy_signals,
-            'sell': sell_signals
-        }
-
+        try:
+            # Get latest patterns
+            latest_patterns = self.get_latest_patterns()
+            
+            if not latest_patterns:
+                return {
+                    'buy': [],
+                    'sell': []
+                }
+            
+            # Define bullish and bearish patterns
+            bullish_patterns = [
+                'bullish_marubozu', 'hammer', 'piercing_pattern',
+                'bullish_engulfing', 'bullish_harami', 'morning_star',
+                'three_white_soldiers'
+            ]
+            
+            bearish_patterns = [
+                'bearish_marubozu', 'hanging_man', 'shooting_star',
+                'dark_cloud_cover', 'bearish_engulfing', 'bearish_harami',
+                'evening_star', 'three_black_crows'
+            ]
+            
+            # Group detected patterns by signal type
+            buy_signals = []
+            sell_signals = []
+            
+            # Get pattern strength weights from parameters
+            pattern_weights = self.params['get_signal_param']('pattern_strength_weights')
+            
+            # Check for each bullish pattern
+            for pattern in bullish_patterns:
+                if pattern in latest_patterns and latest_patterns[pattern]:
+                    strength = pattern_weights.get(pattern, 1) if pattern_weights else 1  # Default strength is 1
+                    buy_signals.append({
+                        'pattern': pattern.replace('_', ' ').title(),
+                        'strength': strength
+                    })
+            
+            # Check for each bearish pattern
+            for pattern in bearish_patterns:
+                if pattern in latest_patterns and latest_patterns[pattern]:
+                    strength = pattern_weights.get(pattern, 1) if pattern_weights else 1  # Default strength is 1
+                    sell_signals.append({
+                        'pattern': pattern.replace('_', ' ').title(),
+                        'strength': strength
+                    })
+            
+            # Return dictionary with buy and sell signals
+            return {
+                'buy': buy_signals,
+                'sell': sell_signals
+            }
+        except Exception as e:
+            self.logger.error(f"Error generating pattern signals: {str(e)}")
+            return {
+                'buy': [],
+                'sell': []
+            }
 # ===============================================================
 # Technical Indicators
 # ===============================================================
