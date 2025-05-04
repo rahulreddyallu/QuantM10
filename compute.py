@@ -338,6 +338,9 @@ class TradingParameters:
             # Rounding parameters
             "rounding_curve_smoothness": self.config.get("rounding_curve_smoothness", 0.7),
             "rounding_min_points": self.config.get("rounding_min_points", 10),
+
+            # Add this directly to CHART_PATTERN_PARAMS
+            "swing_high_low_window": self.config.get("swing_high_low_window", 5),
         }
         
         # Backtesting parameters
@@ -467,7 +470,13 @@ async def get_telegram_bot(token):
     try:
         yield bot
     finally:
-        await bot.session.close()
+        # Handle different versions of python-telegram-bot
+        if hasattr(bot, 'session') and bot.session:
+            await bot.session.close()
+        # For newer versions that might have a different cleanup method
+        elif hasattr(bot, 'close'):
+            await bot.close()
+        # If no cleanup method is available, we just continue
 
 async def send_telegram_message(message, config, logger, retry_attempts=5):
     """
@@ -778,16 +787,14 @@ class UpstoxClient:
                 'name': market_quote['data']['company_name'],
                 'tradingsymbol': market_quote['data']['symbol'],
                 'exchange': market_quote['data']['exchange'],
-                'last_price': market_quote['data']['last_price'],
-                'change': market_quote['data'].get('net_change', 0),
-                'change_percent': market_quote['data'].get('net_change_percentage', 0)
+                'last_price': market_quote['data']['last_price']
             }
             
             return instrument_details
             
         except Exception as e:
             self.logger.error(f"Error getting instrument details: {str(e)}")
-            raise DataFetchError(instrument_key, "Failed to fetch instrument details", e)
+            return None
 
 
 # ===============================================================
