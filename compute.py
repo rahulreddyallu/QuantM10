@@ -179,7 +179,64 @@ class TradingParameters:
             "alligator_jaw": self.config.get("alligator_jaw", 13),
             "alligator_teeth": self.config.get("alligator_teeth", 8),
             "alligator_lips": self.config.get("alligator_lips", 5),
+            "alligator_jaw_offset": self.config.get("alligator_jaw_offset", 8),
+            "alligator_teeth_offset": self.config.get("alligator_teeth_offset", 5),
+            "alligator_lips_offset": self.config.get("alligator_lips_offset", 3),
+
+            "stochastic_rsi": {
+            "period": self.config.get("stochastic_rsi_period", 14),
+            "smooth_k": self.config.get("stochastic_rsi_smooth_k", 3),
+            "smooth_d": self.config.get("stochastic_rsi_smooth_d", 3),
+            "oversold": self.config.get("stochastic_rsi_oversold", 20),
+            "overbought": self.config.get("stochastic_rsi_overbought", 80),
+            },
+            # Williams %R parameters
+            "williams_r": {
+                "period": self.config.get("williams_r_period", 14),
+                "oversold": self.config.get("williams_r_oversold", -80),
+                "overbought": self.config.get("williams_r_overbought", -20),
+            },
             
+            # ATR Bands parameters
+            "atr_bands": {
+                "multiplier_upper": self.config.get("atr_bands_multiplier_upper", 2.0),
+                "multiplier_lower": self.config.get("atr_bands_multiplier_lower", 2.0),
+            },
+            
+            # VWAP parameters
+            "vwap": {
+                "reset_period": self.config.get("vwap_reset_period", "day"),
+            },
+            
+            # Volume Profile parameters
+            "volume_profile": {
+                "period": self.config.get("volume_profile_period", 30),
+            },
+            
+            # Support/Resistance parameters
+            "support_resistance": {
+                "pivot_period": self.config.get("support_resistance_pivot_period", 10),
+                "pivot_threshold": self.config.get("support_resistance_pivot_threshold", 0.03),
+            },
+            
+            # Fibonacci Retracement parameters
+            "fibonacci_retracement": {
+                "lookback": self.config.get("fibonacci_retracement_lookback", 100),
+                "tolerance": self.config.get("fibonacci_retracement_tolerance", 0.03),
+            },
+            
+            # Other potentially needed parameters
+            "divergence": {
+                "lookback": self.config.get("divergence_lookback", 20),
+                "tolerance": self.config.get("divergence_tolerance", 0.03),
+            },
+            
+            "vix_analysis": {
+                "smoothing_period": self.config.get("vix_analysis_smoothing_period", 14),
+                "threshold_high": self.config.get("vix_analysis_threshold_high", 0.5),
+                "threshold_low": self.config.get("vix_analysis_threshold_low", 0.2),
+            },
+                        
             # CPR parameters
             "cpr_use_previous_day": self.config.get("cpr_use_previous_day", True),
             
