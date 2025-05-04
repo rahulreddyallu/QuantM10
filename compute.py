@@ -2580,90 +2580,113 @@ class TechnicalIndicators:
     
     def calculate_bollinger_bands(self):
         """Calculate Bollinger Bands"""
-        # Get Bollinger Bands parameters
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
+            
+            if not found:
+                error_msg = f"'close' column not found for Bollinger Bands! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['bollinger_bands'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
+        # Get parameters
         period = self.params.get_indicator_param('bb_period')
-        std_dev = self.params.get_indicator_param('bb_std_dev')
+        deviations = self.params.get_indicator_param('bb_deviations')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Calculate middle band (SMA)
+        # Calculate Bollinger Bands
         new_cols['bb_middle'] = self.df['close'].rolling(window=period).mean()
+        rolling_std = self.df['close'].rolling(window=period).std()
         
-        # Calculate standard deviation
-        new_cols['bb_std'] = self.df['close'].rolling(window=period).std()
+        new_cols['bb_upper'] = new_cols['bb_middle'] + (rolling_std * deviations)
+        new_cols['bb_lower'] = new_cols['bb_middle'] - (rolling_std * deviations)
         
-        # Calculate upper and lower bands
-        new_cols['bb_upper'] = new_cols['bb_middle'] + (std_dev * new_cols['bb_std'])
-        new_cols['bb_lower'] = new_cols['bb_middle'] - (std_dev * new_cols['bb_std'])
+        # Calculate Bollinger Band Width
+        new_cols['bb_width'] = (new_cols['bb_upper'] - new_cols['bb_lower']) / new_cols['bb_middle']
         
-        # Calculate %B (position within bands)
-        bb_range = new_cols['bb_upper'] - new_cols['bb_lower']
-        bb_range = np.where(bb_range == 0, 0.0001, bb_range)  # Avoid division by zero
-        new_cols['bb_pct_b'] = (self.df['close'] - new_cols['bb_lower']) / bb_range
+        # Calculate %B (shows where price is in relation to the bands)
+        # %B = (Price - Lower Band) / (Upper Band - Lower Band)
+        new_cols['bb_percent_b'] = (self.df['close'] - new_cols['bb_lower']) / (new_cols['bb_upper'] - new_cols['bb_lower'])
         
-        # Calculate bandwidth
-        new_cols['bb_bandwidth'] = bb_range / new_cols['bb_middle']
+        # Determine if price is outside bands
+        new_cols['bb_above_upper'] = self.df['close'] > new_cols['bb_upper']
+        new_cols['bb_below_lower'] = self.df['close'] < new_cols['bb_lower']
         
-        # Generate signals - price touching or breaking bands
-        new_cols['bb_touch_upper'] = self.df['high'] >= new_cols['bb_upper']
-        new_cols['bb_touch_lower'] = self.df['low'] <= new_cols['bb_lower']
+        # Determine if bandwidth is contracting/expanding
+        new_cols['bb_width_direction'] = np.sign(new_cols['bb_width'] - new_cols['bb_width'].shift(1))
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Determine if bandwidth is historically narrow (squeeze potential)
+        width_stdev = new_cols['bb_width'].rolling(window=period*2).std()
+        width_mean = new_cols['bb_width'].rolling(window=period*2).mean()
+        new_cols['bb_squeeze'] = new_cols['bb_width'] < (width_mean - width_stdev)
+        
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for price at bands
-        if self.df['bb_touch_lower'].iloc[-1]:
-            current_signal = 1
-            signal_type = "Price at Lower Band"
-            signal_strength = 1
-        elif self.df['bb_touch_upper'].iloc[-1]:
+        # Check for price returning inside bands after being outside
+        price_returning_from_above = (self.df['close'].iloc[-1] < self.df['bb_upper'].iloc[-1]) and (self.df['close'].iloc[-2] >= self.df['bb_upper'].iloc[-2])
+        price_returning_from_below = (self.df['close'].iloc[-1] > self.df['bb_lower'].iloc[-1]) and (self.df['close'].iloc[-2] <= self.df['bb_lower'].iloc[-2])
+        
+        # Check for squeeze conditions
+        squeeze_breaking_up = self.df['bb_squeeze'].iloc[-2] and not self.df['bb_squeeze'].iloc[-1] and self.df['close'].iloc[-1] > self.df['bb_middle'].iloc[-1]
+        squeeze_breaking_down = self.df['bb_squeeze'].iloc[-2] and not self.df['bb_squeeze'].iloc[-1] and self.df['close'].iloc[-1] < self.df['bb_middle'].iloc[-1]
+        
+        # Generate signals with priorities
+        if price_returning_from_above:
             current_signal = -1
-            signal_type = "Price at Upper Band"
-            signal_strength = 1
-        
-        # Check for Bollinger Band squeeze (narrowing bandwidth)
-        # Get average bandwidth over last 20 periods
-        avg_bandwidth = self.df['bb_bandwidth'].iloc[-20:].mean()
-        current_bandwidth = self.df['bb_bandwidth'].iloc[-1]
-        
-        is_squeeze = current_bandwidth < (avg_bandwidth * 0.8)
-        
-        # Check for %B signals
-        if self.df['bb_pct_b'].iloc[-1] < 0:
-            current_signal = 1
-            signal_type = "Price Below Lower Band"
+            signal_type = "Price Rejected at Upper Band"
             signal_strength = 2
-        elif self.df['bb_pct_b'].iloc[-1] > 1:
+        elif price_returning_from_below:
+            current_signal = 1
+            signal_type = "Price Bounced from Lower Band"
+            signal_strength = 2
+        elif squeeze_breaking_up:
+            current_signal = 1
+            signal_type = "Squeeze Breakout (Bullish)"
+            signal_strength = 3
+        elif squeeze_breaking_down:
+            current_signal = -1
+            signal_type = "Squeeze Breakout (Bearish)"
+            signal_strength = 3
+        elif self.df['bb_above_upper'].iloc[-1]:
             current_signal = -1
             signal_type = "Price Above Upper Band"
-            signal_strength = 2
-        
-        # Improve signal with RSI confirmation
-        if 'rsi' in self.df.columns:
-            if current_signal == 1 and self.df['rsi'].iloc[-1] < 40:
-                signal_type += " with RSI Confirmation"
-                signal_strength += 1
-            elif current_signal == -1 and self.df['rsi'].iloc[-1] > 60:
-                signal_type += " with RSI Confirmation"
-                signal_strength += 1
+            signal_strength = 1
+        elif self.df['bb_below_lower'].iloc[-1]:
+            current_signal = 1
+            signal_type = "Price Below Lower Band"
+            signal_strength = 1
         
         self.indicators['bollinger_bands'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'middle': round(self.df['bb_middle'].iloc[-1], 2) if not pd.isna(self.df['bb_middle'].iloc[-1]) else None,
                 'upper': round(self.df['bb_upper'].iloc[-1], 2) if not pd.isna(self.df['bb_upper'].iloc[-1]) else None,
+                'middle': round(self.df['bb_middle'].iloc[-1], 2) if not pd.isna(self.df['bb_middle'].iloc[-1]) else None,
                 'lower': round(self.df['bb_lower'].iloc[-1], 2) if not pd.isna(self.df['bb_lower'].iloc[-1]) else None,
-                'percent_b': round(self.df['bb_pct_b'].iloc[-1], 2) if not pd.isna(self.df['bb_pct_b'].iloc[-1]) else None,
-                'bandwidth': round(self.df['bb_bandwidth'].iloc[-1], 3) if not pd.isna(self.df['bb_bandwidth'].iloc[-1]) else None,
-                'is_squeeze': is_squeeze,
+                'width': round(self.df['bb_width'].iloc[-1], 3) if not pd.isna(self.df['bb_width'].iloc[-1]) else None,
+                'percent_b': round(self.df['bb_percent_b'].iloc[-1], 2) if not pd.isna(self.df['bb_percent_b'].iloc[-1]) else None,
+                'squeeze': bool(self.df['bb_squeeze'].iloc[-1]),
                 'signal_type': signal_type
             }
         }
@@ -2981,7 +3004,30 @@ class TechnicalIndicators:
     
     def calculate_atr(self):
         """Calculate Average True Range (ATR)"""
-        # Get ATR parameters
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for ATR! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['atr'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+        
+        # Get parameters
         period = self.params.get_indicator_param('atr_period')
         
         # Initialize new columns dictionary
@@ -2992,39 +3038,75 @@ class TechnicalIndicators:
         high_close_prev = abs(self.df['high'] - self.df['close'].shift(1))
         low_close_prev = abs(self.df['low'] - self.df['close'].shift(1))
         
-        # Take the maximum of the three
         new_cols['tr'] = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
         
-        # Calculate ATR (simple moving average of TR for first 'period' values, then smoothed)
+        # Calculate ATR
         new_cols['atr'] = new_cols['tr'].rolling(window=period).mean()
         
-        # Calculate ATR percentage (relative to price)
-        # Avoid division by zero
-        close_non_zero = np.where(self.df['close'] == 0, 0.0001, self.df['close'])
-        new_cols['atr_pct'] = 100 * new_cols['atr'] / close_non_zero
+        # Calculate ATR percentage (ATR / Close)
+        new_cols['atr_percent'] = 100 * new_cols['atr'] / self.df['close']
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Calculate ATR direction (increasing or decreasing)
+        new_cols['atr_direction'] = np.sign(new_cols['atr'] - new_cols['atr'].shift(1))
         
-        # ATR doesn't generate signals directly, but provides volatility information
-        atr_value = self.df['atr'].iloc[-1]
-        atr_pct = self.df['atr_pct'].iloc[-1]
+        # Determine if ATR is historically high or low
+        atr_stdev = new_cols['atr'].rolling(window=period*5).std()
+        atr_mean = new_cols['atr'].rolling(window=period*5).mean()
         
-        # Determine if volatility is high (above average)
-        avg_atr_pct = self.df['atr_pct'].rolling(window=20).mean().iloc[-1]
-        high_volatility = atr_pct > (avg_atr_pct * 1.2)
+        new_cols['atr_high'] = new_cols['atr'] > (atr_mean + atr_stdev)
+        new_cols['atr_low'] = new_cols['atr'] < (atr_mean - atr_stdev)
         
-        # Save values
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
+        
+        # Generate signal
+        current_signal = 0
+        signal_strength = 0
+        signal_type = ""
+        
+        # Check for significant changes in volatility
+        atr_starting_to_increase = (self.df['atr_direction'].iloc[-1] > 0) and (np.sum(self.df['atr_direction'].iloc[-5:-1]) <= -3)
+        atr_starting_to_decrease = (self.df['atr_direction'].iloc[-1] < 0) and (np.sum(self.df['atr_direction'].iloc[-5:-1]) >= 3)
+        
+        # Volatility breakouts/reversals often precede price moves
+        if atr_starting_to_increase and self.df['close'].iloc[-1] > self.df['close'].rolling(window=10).mean().iloc[-1]:
+            current_signal = 1
+            signal_type = "Volatility Expansion (Bullish)"
+            signal_strength = 2
+        elif atr_starting_to_increase and self.df['close'].iloc[-1] < self.df['close'].rolling(window=10).mean().iloc[-1]:
+            current_signal = -1
+            signal_type = "Volatility Expansion (Bearish)"
+            signal_strength = 2
+        elif atr_starting_to_decrease:
+            # Decreasing volatility often leads to consolidation or trend continuation
+            signal_type = "Volatility Contraction"
+            # We don't generate a directional signal here
+        
+        # ATR is primarily a volatility indicator, so directional signals are limited
+        # Rather than providing many weak signals, we focus on volatility transitions
+        
         self.indicators['atr'] = {
-            'signal': 0,  # ATR doesn't generate buy/sell signals directly
-            'signal_strength': 0,
+            'signal': current_signal,
+            'signal_strength': signal_strength,
             'values': {
-                'atr': round(atr_value, 2),
-                'atr_pct': round(atr_pct, 2),
-                'high_volatility': high_volatility,
+                'atr': round(self.df['atr'].iloc[-1], 4) if not pd.isna(self.df['atr'].iloc[-1]) else None,
+                'atr_percent': round(self.df['atr_percent'].iloc[-1], 2) if not pd.isna(self.df['atr_percent'].iloc[-1]) else None,
+                'tr': round(self.df['tr'].iloc[-1], 4) if not pd.isna(self.df['tr'].iloc[-1]) else None,
+                'volatility': 'High' if self.df['atr_high'].iloc[-1] else 'Low' if self.df['atr_low'].iloc[-1] else 'Normal',
+                'direction': 'Increasing' if self.df['atr_direction'].iloc[-1] > 0 else 'Decreasing' if self.df['atr_direction'].iloc[-1] < 0 else 'Stable',
+                'signal_type': signal_type
             }
         }
+        
+        # Add to signals list if signal exists
+        if current_signal != 0:
+            self.signals.append({
+                'indicator': 'ATR',
+                'signal': 'BUY' if current_signal == 1 else 'SELL',
+                'strength': signal_strength,
+                'name': signal_type
+            })
     
     def calculate_atr_bands(self):
         """Calculate ATR Bands (similar to Keltner Channels)"""
