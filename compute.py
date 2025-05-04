@@ -736,10 +736,11 @@ class UpstoxClient:
 # ===============================================================
 # Candlestick Pattern Recognition
 # ===============================================================
+
 import pandas as pd
 import numpy as np
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Any, Callable
 
 class CandlestickPatterns:
     """Complete candlestick pattern detection with precise validation criteria"""
@@ -772,7 +773,7 @@ class CandlestickPatterns:
         self.df = df.copy()
         
         # Initialize parameters (use defaults if not provided)
-        self.params = params or self._default_params()
+        self.params = params or self._create_default_params()
         
         try:
             # Calculate body sizes and shadows for all candles
@@ -783,37 +784,62 @@ class CandlestickPatterns:
         except Exception as e:
             self.logger.error(f"Error during initialization: {str(e)}")
     
-    def _default_params(self):
+    def _create_default_params(self):
         """Create default parameters for pattern detection"""
-        return {
-            'get_pattern_param': lambda x: {
-                'doji_body_threshold': 0.1,
-                'spinning_top_body_threshold': 0.3,
-                'spinning_top_shadow_threshold': 0.2,
-                'marubozu_shadow_threshold': 0.05,
-                'marubozu_body_pct': 0.95,
-                'umbrella_lower_shadow_ratio': 2.0,
-                'umbrella_upper_shadow_threshold': 0.1,
-                'hammer_lower_shadow_ratio': 2.0,
-                'hammer_upper_shadow_threshold': 0.1,
-                'harami_body_size_ratio': 0.6,
-                'star_body_size_threshold': 0.3,
-                'three_candle_trend_threshold': 0.01
-            }.get(x, 0.1),
-            'get_indicator_param': lambda x: {
-                'high_volume_threshold': 1.5
-            }.get(x, 1.0),
-            'get_signal_param': lambda x: {
-                'pattern_strength_weights': {
-                    'bullish_engulfing': 3,
-                    'bearish_engulfing': 3,
-                    'hammer': 2,
-                    'hanging_man': 2,
-                    'morning_star': 3,
-                    'evening_star': 3
+        class DefaultParams:
+            def get_pattern_param(self, name):
+                params = {
+                    'doji_body_threshold': 0.1,
+                    'spinning_top_body_threshold': 0.3,
+                    'spinning_top_shadow_threshold': 0.2,
+                    'marubozu_shadow_threshold': 0.05,
+                    'marubozu_body_pct': 0.95,
+                    'umbrella_lower_shadow_ratio': 2.0,
+                    'umbrella_upper_shadow_threshold': 0.1,
+                    'hammer_lower_shadow_ratio': 2.0,
+                    'hammer_upper_shadow_threshold': 0.1,
+                    'harami_body_size_ratio': 0.6,
+                    'star_body_size_threshold': 0.3,
+                    'three_candle_trend_threshold': 0.01
                 }
-            }.get(x, {})
-        }
+                return params.get(name, 0.1)
+                
+            def get_indicator_param(self, name):
+                params = {
+                    'high_volume_threshold': 1.5
+                }
+                return params.get(name, 1.0)
+                
+            def get_signal_param(self, name):
+                if name == 'pattern_strength_weights':
+                    return {
+                        'bullish_engulfing': 3,
+                        'bearish_engulfing': 3,
+                        'hammer': 2,
+                        'hanging_man': 2,
+                        'morning_star': 3,
+                        'evening_star': 3
+                    }
+                return {}
+        
+        return DefaultParams()
+    
+    def _get_param(self, param_type, param_name, default=None):
+        """Safe parameter access method"""
+        try:
+            if param_type == 'pattern':
+                if hasattr(self.params, 'get_pattern_param'):
+                    return self.params.get_pattern_param(param_name)
+            elif param_type == 'indicator':
+                if hasattr(self.params, 'get_indicator_param'):
+                    return self.params.get_indicator_param(param_name)
+            elif param_type == 'signal':
+                if hasattr(self.params, 'get_signal_param'):
+                    return self.params.get_signal_param(param_name)
+            return default
+        except Exception as e:
+            self.logger.warning(f"Error accessing parameter {param_name}: {e}")
+            return default
     
     def _calculate_candle_dimensions(self):
         """
@@ -868,7 +894,7 @@ class CandlestickPatterns:
                 self.df['volume_ma20'] = self.df['volume'].rolling(window=20).mean()
                 
                 # Flag high volume candles (50% above average)
-                high_volume_threshold = self.params['get_indicator_param']('high_volume_threshold')
+                high_volume_threshold = self._get_param('indicator', 'high_volume_threshold', 1.5)
                 self.df['high_volume'] = self.df['volume'] > (self.df['volume_ma20'] * high_volume_threshold)
                 
                 # Calculate volume ratio to average (avoid division by zero)
@@ -926,6 +952,11 @@ class CandlestickPatterns:
                 # If no volume data, use just price
                 self.df['uptrend'] = price_uptrend
                 self.df['downtrend'] = price_downtrend
+                
+            # Fill NaN values with False
+            self.df['uptrend'] = self.df['uptrend'].fillna(False)
+            self.df['downtrend'] = self.df['downtrend'].fillna(False)
+            
         except Exception as e:
             self.logger.error(f"Error in _calculate_trend_context: {str(e)}")
             raise
@@ -945,8 +976,8 @@ class CandlestickPatterns:
                         'bearish_marubozu': pd.Series(dtype=bool)}
                 
             # Get parameters from config
-            shadow_threshold = self.params['get_pattern_param']('marubozu_shadow_threshold')
-            body_pct_threshold = self.params['get_pattern_param']('marubozu_body_pct')
+            shadow_threshold = self._get_param('pattern', 'marubozu_shadow_threshold', 0.05)
+            body_pct_threshold = self._get_param('pattern', 'marubozu_body_pct', 0.95)
             
             # Detect Bullish Marubozu (vectorized)
             bullish_marubozu = (
@@ -991,7 +1022,7 @@ class CandlestickPatterns:
                 return pd.Series(False, index=self.df.index)
                 
             # Get parameter from config
-            body_threshold = self.params['get_pattern_param']('doji_body_threshold')
+            body_threshold = self._get_param('pattern', 'doji_body_threshold', 0.1)
             
             # Doji criteria: open and close are virtually equal (vectorized)
             doji = (
@@ -1017,8 +1048,8 @@ class CandlestickPatterns:
                 return pd.Series(False, index=self.df.index)
                 
             # Get parameters from config
-            body_threshold = self.params['get_pattern_param']('spinning_top_body_threshold')
-            shadow_threshold = self.params['get_pattern_param']('spinning_top_shadow_threshold')
+            body_threshold = self._get_param('pattern', 'spinning_top_body_threshold', 0.3)
+            shadow_threshold = self._get_param('pattern', 'spinning_top_shadow_threshold', 0.2)
             
             # Spinning Top criteria (vectorized)
             spinning_tops = (
@@ -1046,8 +1077,8 @@ class CandlestickPatterns:
                 return pd.Series(False, index=self.df.index)
                 
             # Get parameters from config
-            lower_shadow_ratio = self.params['get_pattern_param']('umbrella_lower_shadow_ratio')
-            upper_shadow_threshold = self.params['get_pattern_param']('umbrella_upper_shadow_threshold')
+            lower_shadow_ratio = self._get_param('pattern', 'umbrella_lower_shadow_ratio', 2.0)
+            upper_shadow_threshold = self._get_param('pattern', 'umbrella_upper_shadow_threshold', 0.1)
             
             # Paper Umbrella criteria (vectorized)
             paper_umbrella = (
@@ -1074,8 +1105,8 @@ class CandlestickPatterns:
                 return pd.Series(False, index=self.df.index)
                 
             # Get parameters from config
-            lower_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')
-            upper_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
+            lower_shadow_ratio = self._get_param('pattern', 'hammer_lower_shadow_ratio', 2.0)
+            upper_shadow_threshold = self._get_param('pattern', 'hammer_upper_shadow_threshold', 0.1)
             
             # Detect hammer candle structure (vectorized)
             hammer_structure = (
@@ -1108,8 +1139,8 @@ class CandlestickPatterns:
                 return pd.Series(False, index=self.df.index)
                 
             # Get parameters from config - using same as hammer since structure is similar
-            lower_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')
-            upper_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
+            lower_shadow_ratio = self._get_param('pattern', 'hammer_lower_shadow_ratio', 2.0)
+            upper_shadow_threshold = self._get_param('pattern', 'hammer_upper_shadow_threshold', 0.1)
             
             # Detect hanging man candle structure (same as hammer, vectorized)
             hanging_man_structure = (
@@ -1143,8 +1174,8 @@ class CandlestickPatterns:
                 
             # Get parameters from config
             # Using same ratio as hammer but for upper shadow
-            upper_shadow_ratio = self.params['get_pattern_param']('hammer_lower_shadow_ratio')  
-            lower_shadow_threshold = self.params['get_pattern_param']('hammer_upper_shadow_threshold')
+            upper_shadow_ratio = self._get_param('pattern', 'hammer_lower_shadow_ratio', 2.0)
+            lower_shadow_threshold = self._get_param('pattern', 'hammer_upper_shadow_threshold', 0.1)
             
             # Detect shooting star candle structure (vectorized)
             shooting_star_structure = (
@@ -1244,7 +1275,7 @@ class CandlestickPatterns:
             df_prev = self.df.shift(1)
             
             # Get harami body size ratio parameter
-            harami_body_size_ratio = self.params['get_pattern_param']('harami_body_size_ratio')
+            harami_body_size_ratio = self._get_param('pattern', 'harami_body_size_ratio', 0.6)
             
             # Bullish Harami (vectorized) - USE COMPARISON INSTEAD OF BITWISE NOT
             bullish_harami_condition = (
@@ -1381,7 +1412,7 @@ class CandlestickPatterns:
                 return morning_star
             
             # Get star body size threshold
-            star_body_size_threshold = self.params['get_pattern_param']('star_body_size_threshold')
+            star_body_size_threshold = self._get_param('pattern', 'star_body_size_threshold', 0.3)
             
             # Create shifted dataframes for comparison
             df_prev1 = self.df.shift(1)  # second day
@@ -1423,7 +1454,7 @@ class CandlestickPatterns:
                 return evening_star
             
             # Get star body size threshold
-            star_body_size_threshold = self.params['get_pattern_param']('star_body_size_threshold')
+            star_body_size_threshold = self._get_param('pattern', 'star_body_size_threshold', 0.3)
             
             # Create shifted dataframes for comparison
             df_prev1 = self.df.shift(1)  # second day
@@ -1469,7 +1500,7 @@ class CandlestickPatterns:
             df_prev2 = self.df.shift(2)  # two days ago
             
             # Get Three White Soldiers threshold
-            trend_threshold = self.params['get_pattern_param']('three_candle_trend_threshold')
+            trend_threshold = self._get_param('pattern', 'three_candle_trend_threshold', 0.01)
             
             # Three White Soldiers conditions
             condition = (
@@ -1527,7 +1558,7 @@ class CandlestickPatterns:
             df_prev2 = self.df.shift(2)  # two days ago
             
             # Get Three Black Crows threshold
-            trend_threshold = self.params['get_pattern_param']('three_candle_trend_threshold')
+            trend_threshold = self._get_param('pattern', 'three_candle_trend_threshold', 0.01)
             
             # Three Black Crows conditions - USE COMPARISON INSTEAD OF BITWISE NOT
             condition = (
@@ -1759,12 +1790,12 @@ class CandlestickPatterns:
             sell_signals = []
             
             # Get pattern strength weights from parameters
-            pattern_weights = self.params['get_signal_param']('pattern_strength_weights')
+            pattern_weights = self._get_param('signal', 'pattern_strength_weights', {})
             
             # Check for each bullish pattern
             for pattern in bullish_patterns:
                 if pattern in latest_patterns and latest_patterns[pattern]:
-                    strength = pattern_weights.get(pattern, 1) if pattern_weights else 1  # Default strength is 1
+                    strength = pattern_weights.get(pattern, 1) if isinstance(pattern_weights, dict) else 1
                     buy_signals.append({
                         'pattern': pattern.replace('_', ' ').title(),
                         'strength': strength
@@ -1773,7 +1804,7 @@ class CandlestickPatterns:
             # Check for each bearish pattern
             for pattern in bearish_patterns:
                 if pattern in latest_patterns and latest_patterns[pattern]:
-                    strength = pattern_weights.get(pattern, 1) if pattern_weights else 1  # Default strength is 1
+                    strength = pattern_weights.get(pattern, 1) if isinstance(pattern_weights, dict) else 1
                     sell_signals.append({
                         'pattern': pattern.replace('_', ' ').title(),
                         'strength': strength
@@ -1790,6 +1821,7 @@ class CandlestickPatterns:
                 'buy': [],
                 'sell': []
             }
+    
 # ===============================================================
 # Technical Indicators
 # ===============================================================
