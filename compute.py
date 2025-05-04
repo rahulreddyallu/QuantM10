@@ -2191,6 +2191,27 @@ class TechnicalIndicators:
     
     def calculate_macd(self):
         """Calculate MACD (Moving Average Convergence Divergence)"""
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
+            
+            if not found:
+                error_msg = f"'close' column not found for MACD! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['macd'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
         # Get MACD parameters
         fast_period = self.params.get_indicator_param('macd_fast')
         slow_period = self.params.get_indicator_param('macd_slow')
@@ -2230,15 +2251,9 @@ class TechnicalIndicators:
         # Detect histogram direction changes
         new_cols['hist_direction'] = np.sign(temp_df['macd_histogram'] - temp_df['macd_histogram'].shift(1))
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
-        
-        # Bullish divergence: Price makes lower lows but MACD makes higher lows
-        # Bearish divergence: Price makes higher highs but MACD makes lower highs
-        # (Complex calculation implemented in a simplified way)
-        bullish_divergence = False
-        bearish_divergence = False
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
@@ -2282,8 +2297,8 @@ class TechnicalIndicators:
                 'histogram': round(self.df['macd_histogram'].iloc[-1], 4),
                 'hist_direction': 'Increasing' if self.df['hist_direction'].iloc[-1] > 0 else 
                                  'Decreasing' if self.df['hist_direction'].iloc[-1] < 0 else 'Unchanged',
-                'bullish_divergence': bullish_divergence,
-                'bearish_divergence': bearish_divergence,
+                'bullish_divergence': False,  # Placeholder
+                'bearish_divergence': False,  # Placeholder
                 'signal_type': signal_type
             }
         }
@@ -2299,6 +2314,27 @@ class TechnicalIndicators:
             
     def calculate_rsi(self):
         """Calculate Relative Strength Index (RSI)"""
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
+            
+            if not found:
+                error_msg = f"'close' column not found for RSI! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['rsi'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
         # Get RSI parameters
         period = self.params.get_indicator_param('rsi_period')
         oversold = self.params.get_indicator_param('rsi_oversold')
@@ -2342,9 +2378,9 @@ class TechnicalIndicators:
         new_cols['rsi_sell_signal'] = ((temp_df['rsi'] < overbought) & 
                                       (temp_df['rsi'].shift(1) >= overbought)).astype(int)
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
@@ -2395,86 +2431,136 @@ class TechnicalIndicators:
     
     def calculate_stochastic(self):
         """Calculate Stochastic Oscillator"""
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for Stochastic! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['stochastic'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+                
         # Get Stochastic parameters
-        k_period = self.params.get_indicator_param('stoch_k_period')
-        d_period = self.params.get_indicator_param('stoch_d_period')
-        slowing = self.params.get_indicator_param('stoch_slowing')
-        oversold = self.params.get_indicator_param('stoch_oversold')
-        overbought = self.params.get_indicator_param('stoch_overbought')
+        k_period = self.params.get_indicator_param('stochastic_k_period')
+        d_period = self.params.get_indicator_param('stochastic_d_period')
+        slowing = self.params.get_indicator_param('stochastic_slowing')
+        overbought = self.params.get_indicator_param('stochastic_overbought')
+        oversold = self.params.get_indicator_param('stochastic_oversold')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Calculate %K (The current close in relation to the range over k_period)
-        lowest_low = self.df['low'].rolling(window=k_period).min()
-        highest_high = self.df['high'].rolling(window=k_period).max()
+        # Calculate %K
+        low_min = self.df['low'].rolling(window=k_period).min()
+        high_max = self.df['high'].rolling(window=k_period).max()
         
         # Handle division by zero
-        range_hl = highest_high - lowest_low
-        range_hl = np.where(range_hl == 0, 0.0001, range_hl)  # Avoid division by zero
+        denom = high_max - low_min
+        denom = np.where(denom == 0, 0.0001, denom)  # Set small value instead of zero
         
-        new_cols['stoch_k_raw'] = 100 * ((self.df['close'] - lowest_low) / range_hl)
+        k_raw = 100 * ((self.df['close'] - low_min) / denom)
         
-        # Apply slowing for %K
-        new_cols['stoch_k'] = pd.Series(new_cols['stoch_k_raw'], index=self.df.index).rolling(window=slowing).mean()
+        # Apply slowing to %K if specified
+        if slowing > 1:
+            new_cols['stoch_k'] = k_raw.rolling(window=slowing).mean()
+        else:
+            new_cols['stoch_k'] = k_raw
         
-        # Calculate %D (Simple moving average of %K)
-        new_cols['stoch_d'] = pd.Series(new_cols['stoch_k'], index=self.df.index).rolling(window=d_period).mean()
+        # Calculate %D (SMA of %K)
+        new_cols['stoch_d'] = new_cols['stoch_k'].rolling(window=d_period).mean()
         
-        # Create temporary dataframe
+        # Create temporary DataFrame for signal calculations
         temp_df = pd.DataFrame(index=self.df.index)
-        for key, val in new_cols.items():
-            temp_df[key] = val
+        temp_df['stoch_k'] = new_cols['stoch_k']
+        temp_df['stoch_d'] = new_cols['stoch_d']
         
-        # Generate signals
-        new_cols['stoch_oversold'] = temp_df['stoch_k'] < oversold
+        # Calculate overbought/oversold conditions
         new_cols['stoch_overbought'] = temp_df['stoch_k'] > overbought
+        new_cols['stoch_oversold'] = temp_df['stoch_k'] < oversold
         
-        # Detect K crossing above D in oversold region
-        new_cols['stoch_buy_signal'] = ((temp_df['stoch_k'] > temp_df['stoch_d']) & 
-                                       (temp_df['stoch_k'].shift(1) <= temp_df['stoch_d'].shift(1)) &
-                                       (temp_df['stoch_k'] < oversold + 5)).astype(int)
+        # Calculate crossovers
+        k_above_d = temp_df['stoch_k'] > temp_df['stoch_d']
         
-        # Detect K crossing below D in overbought region
-        new_cols['stoch_sell_signal'] = ((temp_df['stoch_k'] < temp_df['stoch_d']) & 
-                                        (temp_df['stoch_k'].shift(1) >= temp_df['stoch_d'].shift(1)) &
-                                        (temp_df['stoch_k'] > overbought - 5)).astype(int)
+        new_cols['stoch_crossover'] = pd.Series(0, index=self.df.index)
+        new_cols['stoch_crossover'].loc[k_above_d] = 1
+        new_cols['stoch_crossover'].loc[~k_above_d] = -1
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Calculate buy/sell signals
+        new_cols['stoch_buy_signal'] = ((new_cols['stoch_crossover'] == 1) & 
+                                      (new_cols['stoch_crossover'].shift(1) == -1) & 
+                                      (temp_df['stoch_k'] < 50)).astype(int)
+        
+        new_cols['stoch_sell_signal'] = ((new_cols['stoch_crossover'] == -1) & 
+                                       (new_cols['stoch_crossover'].shift(1) == 1) & 
+                                       (temp_df['stoch_k'] > 50)).astype(int)
+        
+        # Add signals for oversold/overbought crossings
+        new_cols['stoch_exit_oversold'] = ((temp_df['stoch_k'] > oversold) & 
+                                          (temp_df['stoch_k'].shift(1) <= oversold)).astype(int)
+        
+        new_cols['stoch_exit_overbought'] = ((temp_df['stoch_k'] < overbought) & 
+                                           (temp_df['stoch_k'].shift(1) >= overbought)).astype(int)
+        
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for crossovers in oversold/overbought regions
+        # First check for crossover signals
         if self.df['stoch_buy_signal'].iloc[-1] == 1:
             current_signal = 1
-            signal_type = "Bullish Crossover from Oversold"
+            signal_type = "Bullish K-D Crossover"
             signal_strength = 2
         elif self.df['stoch_sell_signal'].iloc[-1] == 1:
             current_signal = -1
-            signal_type = "Bearish Crossover from Overbought"
+            signal_type = "Bearish K-D Crossover"
             signal_strength = 2
         
-        # Also check for extreme oversold/overbought conditions
-        elif self.df['stoch_oversold'].iloc[-1] and self.df['stoch_k'].iloc[-1] < oversold - 10:
+        # Then check for oversold/overbought exit signals (stronger)
+        if self.df['stoch_exit_oversold'].iloc[-1] == 1:
             current_signal = 1
-            signal_type = "Extremely Oversold"
-            signal_strength = 1
-        elif self.df['stoch_overbought'].iloc[-1] and self.df['stoch_k'].iloc[-1] > overbought + 10:
+            signal_type = "Exit from Oversold"
+            signal_strength = 3
+        elif self.df['stoch_exit_overbought'].iloc[-1] == 1:
             current_signal = -1
-            signal_type = "Extremely Overbought"
-            signal_strength = 1
+            signal_type = "Exit from Overbought"
+            signal_strength = 3
+        
+        # If no signal yet, check current conditions
+        if current_signal == 0:
+            if self.df['stoch_oversold'].iloc[-1]:
+                current_signal = 1
+                signal_type = "Oversold"
+                signal_strength = 1
+            elif self.df['stoch_overbought'].iloc[-1]:
+                current_signal = -1
+                signal_type = "Overbought"
+                signal_strength = 1
         
         self.indicators['stochastic'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'stoch_k': round(self.df['stoch_k'].iloc[-1], 2) if not pd.isna(self.df['stoch_k'].iloc[-1]) else None,
-                'stoch_d': round(self.df['stoch_d'].iloc[-1], 2) if not pd.isna(self.df['stoch_d'].iloc[-1]) else None,
+                'k': round(self.df['stoch_k'].iloc[-1], 2) if not pd.isna(self.df['stoch_k'].iloc[-1]) else None,
+                'd': round(self.df['stoch_d'].iloc[-1], 2) if not pd.isna(self.df['stoch_d'].iloc[-1]) else None,
                 'oversold_threshold': oversold,
                 'overbought_threshold': overbought,
                 'is_oversold': self.df['stoch_oversold'].iloc[-1],
@@ -2593,6 +2679,29 @@ class TechnicalIndicators:
     
     def calculate_supertrend(self):
         """Calculate Supertrend indicator"""
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for Supertrend! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['supertrend'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+        
         # Get Supertrend parameters
         period = self.params.get_indicator_param('supertrend_period')
         multiplier = self.params.get_indicator_param('supertrend_multiplier')
@@ -2666,9 +2775,9 @@ class TechnicalIndicators:
         new_cols['supertrend_buy_signal'] = pd.Series(supertrend_buy_signal, index=self.df.index).astype(int)
         new_cols['supertrend_sell_signal'] = pd.Series(supertrend_sell_signal, index=self.df.index).astype(int)
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
@@ -2717,6 +2826,29 @@ class TechnicalIndicators:
     
     def calculate_parabolic_sar(self):
         """Calculate Parabolic SAR"""
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for Parabolic SAR! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['parabolic_sar'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+                    
         # Get PSAR parameters
         af = self.params.get_indicator_param('psar_af')        # Acceleration Factor
         max_af = self.params.get_indicator_param('psar_max_af') # Maximum Acceleration Factor
@@ -2798,9 +2930,9 @@ class TechnicalIndicators:
         new_cols['psar_buy_signal'] = pd.Series(buy_signal, index=self.df.index).astype(int)
         new_cols['psar_sell_signal'] = pd.Series(sell_signal, index=self.df.index).astype(int)
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
@@ -2977,6 +3109,29 @@ class TechnicalIndicators:
     
     def calculate_adx(self):
         """Calculate Average Directional Index (ADX)"""
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for ADX! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['adx'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+        
         # Get ADX parameters
         period = self.params.get_indicator_param('adx_period')
         threshold = self.params.get_indicator_param('adx_threshold')
@@ -3044,9 +3199,9 @@ class TechnicalIndicators:
             -1  # Bearish
         )
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
@@ -3110,103 +3265,118 @@ class TechnicalIndicators:
             })
     
     def calculate_aroon(self):
-        """Calculate Aroon indicator"""
+        """Calculate Aroon Indicator"""
+        # Check for required columns
+        required_cols = ['high', 'low']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for Aroon! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['aroon'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+        
         # Get Aroon parameters
         period = self.params.get_indicator_param('aroon_period')
-        uptrend_threshold = self.params.get_indicator_param('aroon_uptrend')
-        downtrend_threshold = self.params.get_indicator_param('aroon_downtrend')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Prepare arrays for Aroon Up and Down
-        aroon_up = np.full(len(self.df), np.nan)
-        aroon_down = np.full(len(self.df), np.nan)
+        high_values = self.df['high'].values
+        low_values = self.df['low'].values
         
-        # Calculate Aroon values using NumPy arrays for performance
-        # Loop implementation - could be vectorized but for clarity we'll use a loop
+        # Arrays to store results
+        aroon_up = np.zeros(len(self.df))
+        aroon_down = np.zeros(len(self.df))
+        aroon_oscillator = np.zeros(len(self.df))
+        
+        # Calculate Aroon for each candle
         for i in range(period, len(self.df)):
-            # Get the window for calculation
-            window_high = self.df['high'].iloc[i-period+1:i+1].values
-            window_low = self.df['low'].iloc[i-period+1:i+1].values
+            # Get the high and low prices for the lookback period
+            period_high = high_values[i-period:i+1]
+            period_low = low_values[i-period:i+1]
             
-            # Calculate days since highest high and lowest low in window
-            days_since_high = period - 1 - np.argmax(window_high)
-            days_since_low = period - 1 - np.argmin(window_low)
+            # Find positions of max high and min low in the period
+            high_days = period - np.argmax(period_high[::-1])
+            low_days = period - np.argmax(period_low[::-1])
             
-            # Calculate Aroon Up/Down
-            aroon_up[i] = 100 * (period - days_since_high) / period
-            aroon_down[i] = 100 * (period - days_since_low) / period
+            # Calculate Aroon values
+            aroon_up[i] = ((period - high_days) / period) * 100
+            aroon_down[i] = ((period - low_days) / period) * 100
+            aroon_oscillator[i] = aroon_up[i] - aroon_down[i]
         
-        # Add Aroon Up/Down to new columns dictionary
         new_cols['aroon_up'] = pd.Series(aroon_up, index=self.df.index)
         new_cols['aroon_down'] = pd.Series(aroon_down, index=self.df.index)
+        new_cols['aroon_oscillator'] = pd.Series(aroon_oscillator, index=self.df.index)
         
-        # Calculate Aroon Oscillator
-        new_cols['aroon_oscillator'] = new_cols['aroon_up'] - new_cols['aroon_down']
+        # Generate crossover signals
+        aroon_up_cross_above = np.zeros(len(self.df))
+        aroon_down_cross_above = np.zeros(len(self.df))
         
-        # Create temporary dataframe for signal calculations
-        temp_df = pd.DataFrame(index=self.df.index)
-        temp_df['aroon_up'] = new_cols['aroon_up']
-        temp_df['aroon_down'] = new_cols['aroon_down']
+        for i in range(1, len(self.df)):
+            if aroon_up[i] > aroon_down[i] and aroon_up[i-1] <= aroon_down[i-1]:
+                aroon_up_cross_above[i] = 1
+            if aroon_down[i] > aroon_up[i] and aroon_down[i-1] <= aroon_up[i-1]:
+                aroon_down_cross_above[i] = 1
         
-        # Generate signals - Strong uptrend/downtrend
-        new_cols['aroon_strong_uptrend'] = (
-            (temp_df['aroon_up'] > uptrend_threshold) & 
-            (temp_df['aroon_down'] < downtrend_threshold)
-        )
+        new_cols['aroon_up_cross_above'] = pd.Series(aroon_up_cross_above, index=self.df.index)
+        new_cols['aroon_down_cross_above'] = pd.Series(aroon_down_cross_above, index=self.df.index)
         
-        new_cols['aroon_strong_downtrend'] = (
-            (temp_df['aroon_down'] > uptrend_threshold) & 
-            (temp_df['aroon_up'] < downtrend_threshold)
-        )
+        # Generate trend signals
+        new_cols['aroon_bullish'] = (new_cols['aroon_up'] > 70) & (new_cols['aroon_down'] < 30)
+        new_cols['aroon_bearish'] = (new_cols['aroon_down'] > 70) & (new_cols['aroon_up'] < 30)
         
-        # Create crossover signals
-        new_cols['aroon_crossover'] = np.zeros(len(self.df))
-        above_mask = temp_df['aroon_up'] > temp_df['aroon_down']
-        below_mask = temp_df['aroon_up'] < temp_df['aroon_down']
-        
-        new_cols['aroon_crossover'][above_mask] = 1
-        new_cols['aroon_crossover'][below_mask] = -1
-        
-        # Convert to Series for shift operation
-        crossover_series = pd.Series(new_cols['aroon_crossover'], index=self.df.index)
-        
-        # Detect bullish and bearish crossovers
-        new_cols['aroon_buy_signal'] = ((crossover_series == 1) & 
-                                      (crossover_series.shift(1) == -1)).astype(int)
-        
-        new_cols['aroon_sell_signal'] = ((crossover_series == -1) & 
-                                       (crossover_series.shift(1) == 1)).astype(int)
-        
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for crossovers
-        if self.df['aroon_buy_signal'].iloc[-1] == 1:
+        # Check for crossovers (strongest signals)
+        if self.df['aroon_up_cross_above'].iloc[-1] == 1:
             current_signal = 1
             signal_type = "Bullish Crossover"
             signal_strength = 2
-        elif self.df['aroon_sell_signal'].iloc[-1] == 1:
+        elif self.df['aroon_down_cross_above'].iloc[-1] == 1:
             current_signal = -1
             signal_type = "Bearish Crossover"
             signal_strength = 2
         
-        # Check for strong trends
-        elif self.df['aroon_strong_uptrend'].iloc[-1]:
+        # Check for extreme Aroon values (strong trend confirmation)
+        elif self.df['aroon_bullish'].iloc[-1]:
             current_signal = 1
-            signal_type = "Strong Uptrend"
+            signal_type = "Strong Bullish Trend"
             signal_strength = 3
-        elif self.df['aroon_strong_downtrend'].iloc[-1]:
+        elif self.df['aroon_bearish'].iloc[-1]:
             current_signal = -1
-            signal_type = "Strong Downtrend"
+            signal_type = "Strong Bearish Trend"
             signal_strength = 3
+        
+        # Check for weaker trend (just Aroon Up > Aroon Down or vice versa)
+        elif self.df['aroon_up'].iloc[-1] > self.df['aroon_down'].iloc[-1]:
+            current_signal = 1
+            signal_type = "Weak Bullish Trend"
+            signal_strength = 1
+        elif self.df['aroon_down'].iloc[-1] > self.df['aroon_up'].iloc[-1]:
+            current_signal = -1
+            signal_type = "Weak Bearish Trend"
+            signal_strength = 1
         
         self.indicators['aroon'] = {
             'signal': current_signal,
@@ -3214,9 +3384,7 @@ class TechnicalIndicators:
             'values': {
                 'aroon_up': round(self.df['aroon_up'].iloc[-1], 2),
                 'aroon_down': round(self.df['aroon_down'].iloc[-1], 2),
-                'aroon_oscillator': round(self.df['aroon_oscillator'].iloc[-1], 2),
-                'strong_uptrend': self.df['aroon_strong_uptrend'].iloc[-1],
-                'strong_downtrend': self.df['aroon_strong_downtrend'].iloc[-1],
+                'oscillator': round(self.df['aroon_oscillator'].iloc[-1], 2),
                 'signal_type': signal_type
             }
         }
@@ -3506,93 +3674,129 @@ class TechnicalIndicators:
     
     def calculate_stochastic_rsi(self):
         """Calculate Stochastic RSI"""
-        # Ensure RSI is calculated
-        if 'rsi' not in self.df.columns:
-            self.calculate_rsi()
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
             
-        # Get parameters with error handling
-        try:
-            stoch_rsi_params = self.params.get_indicator_param('stochastic_rsi')
-            period = stoch_rsi_params.get('period', 14)
-            smooth_k = stoch_rsi_params.get('smooth_k', 3)
-            smooth_d = stoch_rsi_params.get('smooth_d', 3)
-            oversold = stoch_rsi_params.get('oversold', 20)
-            overbought = stoch_rsi_params.get('overbought', 80)
-        except:
-            # Default values if parameters can't be retrieved
-            period = 14
-            smooth_k = 3
-            smooth_d = 3
-            oversold = 20
-            overbought = 80
+            if not found:
+                error_msg = f"'close' column not found for Stochastic RSI! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['stochastic_rsi'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
+        # Get parameters
+        rsi_period = self.params.get_indicator_param('stoch_rsi_rsi_period')
+        stoch_period = self.params.get_indicator_param('stoch_rsi_stoch_period')
+        k_period = self.params.get_indicator_param('stoch_rsi_k_period')
+        d_period = self.params.get_indicator_param('stoch_rsi_d_period')
+        overbought = self.params.get_indicator_param('stoch_rsi_overbought')
+        oversold = self.params.get_indicator_param('stoch_rsi_oversold')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Calculate Stochastic RSI components
-        lowest_rsi = self.df['rsi'].rolling(window=period).min()
-        highest_rsi = self.df['rsi'].rolling(window=period).max()
+        # Calculate RSI if not already present
+        if 'rsi' not in self.df.columns:
+            self.calculate_rsi()
         
-        # Calculate raw K with division by zero protection
-        rsi_range = highest_rsi - lowest_rsi
-        rsi_range = np.where(rsi_range == 0, 0.0001, rsi_range)  # Add small value to avoid division by zero
-        stoch_rsi_k_raw = 100 * (self.df['rsi'] - lowest_rsi) / rsi_range
+        rsi = self.df['rsi']
         
-        new_cols['stoch_rsi_k_raw'] = pd.Series(stoch_rsi_k_raw, index=self.df.index)
+        # Calculate Stochastic of RSI
+        rolling_min = rsi.rolling(window=stoch_period).min()
+        rolling_max = rsi.rolling(window=stoch_period).max()
         
-        # Smooth K
-        new_cols['stoch_rsi_k'] = new_cols['stoch_rsi_k_raw'].rolling(window=smooth_k).mean()
+        # Handle division by zero
+        denom = rolling_max - rolling_min
+        denom = np.where(np.isnan(denom) | (denom == 0), 0.0001, denom)  # Avoid division by zero
         
-        # Calculate D (moving average of K)
-        new_cols['stoch_rsi_d'] = new_cols['stoch_rsi_k'].rolling(window=smooth_d).mean()
+        # Fast K is the current RSI relative to its range
+        stoch_k_raw = 100 * ((rsi - rolling_min) / denom)
         
-        # Create temporary DataFrame for signal calculations
+        # Apply smoothing to K and D
+        new_cols['stoch_rsi_k'] = stoch_k_raw.rolling(window=k_period).mean()
+        new_cols['stoch_rsi_d'] = new_cols['stoch_rsi_k'].rolling(window=d_period).mean()
+        
+        # Create temporary dataframe for signal calculations
         temp_df = pd.DataFrame(index=self.df.index)
         temp_df['stoch_rsi_k'] = new_cols['stoch_rsi_k']
         temp_df['stoch_rsi_d'] = new_cols['stoch_rsi_d']
         
-        # Generate signals
-        new_cols['stoch_rsi_oversold'] = temp_df['stoch_rsi_k'] < oversold
+        # Calculate overbought/oversold conditions
         new_cols['stoch_rsi_overbought'] = temp_df['stoch_rsi_k'] > overbought
+        new_cols['stoch_rsi_oversold'] = temp_df['stoch_rsi_k'] < oversold
         
-        # Detect K crossing above D from oversold region
-        new_cols['stoch_rsi_buy_signal'] = ((temp_df['stoch_rsi_k'] > temp_df['stoch_rsi_d']) & 
-                                          (temp_df['stoch_rsi_k'].shift(1) <= temp_df['stoch_rsi_d'].shift(1)) &
-                                          (temp_df['stoch_rsi_k'] < 30)).astype(int)
+        # Calculate crossovers
+        k_above_d = temp_df['stoch_rsi_k'] > temp_df['stoch_rsi_d']
         
-        # Detect K crossing below D from overbought region
-        new_cols['stoch_rsi_sell_signal'] = ((temp_df['stoch_rsi_k'] < temp_df['stoch_rsi_d']) & 
-                                           (temp_df['stoch_rsi_k'].shift(1) >= temp_df['stoch_rsi_d'].shift(1)) &
-                                           (temp_df['stoch_rsi_k'] > 70)).astype(int)
+        new_cols['stoch_rsi_crossover'] = pd.Series(0, index=self.df.index)
+        new_cols['stoch_rsi_crossover'].loc[k_above_d] = 1
+        new_cols['stoch_rsi_crossover'].loc[~k_above_d] = -1
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Calculate buy/sell signals
+        new_cols['stoch_rsi_buy_signal'] = ((new_cols['stoch_rsi_crossover'] == 1) & 
+                                          (new_cols['stoch_rsi_crossover'].shift(1) == -1) & 
+                                          (temp_df['stoch_rsi_k'] < 50)).astype(int)
+        
+        new_cols['stoch_rsi_sell_signal'] = ((new_cols['stoch_rsi_crossover'] == -1) & 
+                                           (new_cols['stoch_rsi_crossover'].shift(1) == 1) & 
+                                           (temp_df['stoch_rsi_k'] > 50)).astype(int)
+        
+        # Add signals for oversold/overbought crossings
+        new_cols['stoch_rsi_exit_oversold'] = ((temp_df['stoch_rsi_k'] > oversold) & 
+                                             (temp_df['stoch_rsi_k'].shift(1) <= oversold)).astype(int)
+        
+        new_cols['stoch_rsi_exit_overbought'] = ((temp_df['stoch_rsi_k'] < overbought) & 
+                                              (temp_df['stoch_rsi_k'].shift(1) >= overbought)).astype(int)
+        
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for crossovers in oversold/overbought regions
-        if self.df['stoch_rsi_buy_signal'].iloc[-1] == 1:
+        # First check for oversold/overbought exit signals (strongest)
+        if self.df['stoch_rsi_exit_oversold'].iloc[-1] == 1:
             current_signal = 1
-            signal_type = "Bullish Crossover from Oversold"
+            signal_type = "Exit from Oversold"
             signal_strength = 3
-        elif self.df['stoch_rsi_sell_signal'].iloc[-1] == 1:
+        elif self.df['stoch_rsi_exit_overbought'].iloc[-1] == 1:
             current_signal = -1
-            signal_type = "Bearish Crossover from Overbought"
+            signal_type = "Exit from Overbought"
             signal_strength = 3
         
-        # Also check for extreme oversold/overbought conditions
-        elif self.df['stoch_rsi_oversold'].iloc[-1] and self.df['stoch_rsi_k'].iloc[-1] < 10:
+        # Then check for crossover signals (medium strength)
+        elif self.df['stoch_rsi_buy_signal'].iloc[-1] == 1:
             current_signal = 1
-            signal_type = "Extremely Oversold"
+            signal_type = "Bullish K-D Crossover"
             signal_strength = 2
-        elif self.df['stoch_rsi_overbought'].iloc[-1] and self.df['stoch_rsi_k'].iloc[-1] > 90:
+        elif self.df['stoch_rsi_sell_signal'].iloc[-1] == 1:
             current_signal = -1
-            signal_type = "Extremely Overbought"
+            signal_type = "Bearish K-D Crossover"
             signal_strength = 2
+        
+        # If no signal yet, check current conditions (weakest)
+        elif self.df['stoch_rsi_oversold'].iloc[-1]:
+            current_signal = 1
+            signal_type = "Oversold"
+            signal_strength = 1
+        elif self.df['stoch_rsi_overbought'].iloc[-1]:
+            current_signal = -1
+            signal_type = "Overbought"
+            signal_strength = 1
         
         self.indicators['stochastic_rsi'] = {
             'signal': current_signal,
@@ -3602,8 +3806,8 @@ class TechnicalIndicators:
                 'd': round(self.df['stoch_rsi_d'].iloc[-1], 2) if not pd.isna(self.df['stoch_rsi_d'].iloc[-1]) else None,
                 'oversold_threshold': oversold,
                 'overbought_threshold': overbought,
-                'is_oversold': self.df['stoch_rsi_oversold'].iloc[-1] if not pd.isna(self.df['stoch_rsi_oversold'].iloc[-1]) else False,
-                'is_overbought': self.df['stoch_rsi_overbought'].iloc[-1] if not pd.isna(self.df['stoch_rsi_overbought'].iloc[-1]) else False,
+                'is_oversold': self.df['stoch_rsi_oversold'].iloc[-1],
+                'is_overbought': self.df['stoch_rsi_overbought'].iloc[-1],
                 'signal_type': signal_type
             }
         }
@@ -3619,76 +3823,108 @@ class TechnicalIndicators:
     
     def calculate_rate_of_change(self):
         """Calculate Rate of Change (ROC)"""
-        # Get parameters with error handling
-        try:
-            period = self.params.get_indicator_param('roc_period')
-        except:
-            period = 14  # Default if not specified
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
+            
+            if not found:
+                error_msg = f"'close' column not found for ROC! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['roc'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
+        # Get ROC parameters
+        period = self.params.get_indicator_param('roc_period')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Calculate ROC: ((current_price - price_n_periods_ago) / price_n_periods_ago) * 100
-        # Handle division by zero
-        shifted_price = self.df['close'].shift(period)
-        shifted_price_non_zero = np.where(shifted_price == 0, 0.0001, shifted_price)  # Avoid division by zero
-        roc = ((self.df['close'] - shifted_price) / shifted_price_non_zero) * 100
+        # Calculate ROC: ((Close - Close n periods ago) / Close n periods ago) * 100
+        new_cols['roc'] = 100 * (self.df['close'] - self.df['close'].shift(period)) / self.df['close'].shift(period)
         
-        new_cols['roc'] = pd.Series(roc, index=self.df.index)
+        # Calculate moving average of ROC for signal line
+        ma_period = self.params.get_indicator_param('roc_ma_period')
+        new_cols['roc_ma'] = new_cols['roc'].rolling(window=ma_period).mean()
         
-        # Generate signals using NumPy for performance
-        roc_signal = np.zeros(len(self.df))
-        roc_signal[roc > 0] = 1
-        roc_signal[roc < 0] = -1
+        # Calculate crossovers and signals
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['roc'] = new_cols['roc']
+        temp_df['roc_ma'] = new_cols['roc_ma']
         
-        new_cols['roc_signal'] = pd.Series(roc_signal, index=self.df.index)
+        # Determine zero crossovers
+        temp_df['roc_above_zero'] = temp_df['roc'] > 0
+        temp_df['roc_cross_above_zero'] = (temp_df['roc'] > 0) & (temp_df['roc'].shift(1) <= 0)
+        temp_df['roc_cross_below_zero'] = (temp_df['roc'] < 0) & (temp_df['roc'].shift(1) >= 0)
         
-        # Convert to Series for shift operation
-        roc_signal_series = pd.Series(roc_signal, index=self.df.index)
+        # Determine MA crossovers
+        temp_df['roc_above_ma'] = temp_df['roc'] > temp_df['roc_ma']
+        temp_df['roc_cross_above_ma'] = (temp_df['roc'] > temp_df['roc_ma']) & (temp_df['roc'].shift(1) <= temp_df['roc_ma'].shift(1))
+        temp_df['roc_cross_below_ma'] = (temp_df['roc'] < temp_df['roc_ma']) & (temp_df['roc'].shift(1) >= temp_df['roc_ma'].shift(1))
         
-        # Detect crossovers
-        new_cols['roc_buy_signal'] = ((roc_signal_series == 1) & 
-                                    (roc_signal_series.shift(1) == -1)).astype(int)
+        # Add columns to new_cols
+        new_cols['roc_above_zero'] = temp_df['roc_above_zero']
+        new_cols['roc_cross_above_zero'] = temp_df['roc_cross_above_zero']
+        new_cols['roc_cross_below_zero'] = temp_df['roc_cross_below_zero']
+        new_cols['roc_above_ma'] = temp_df['roc_above_ma']
+        new_cols['roc_cross_above_ma'] = temp_df['roc_cross_above_ma']
+        new_cols['roc_cross_below_ma'] = temp_df['roc_cross_below_ma']
         
-        new_cols['roc_sell_signal'] = ((roc_signal_series == -1) & 
-                                     (roc_signal_series.shift(1) == 1)).astype(int)
-        
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for crossovers
-        if self.df['roc_buy_signal'].iloc[-1] == 1:
+        # Check for crossover signals (strongest)
+        if self.df['roc_cross_above_zero'].iloc[-1]:
             current_signal = 1
-            signal_type = "Crossed Above Zero"
-            signal_strength = 2
-        elif self.df['roc_sell_signal'].iloc[-1] == 1:
+            signal_type = "Bullish Zero Line Crossover"
+            signal_strength = 3
+        elif self.df['roc_cross_below_zero'].iloc[-1]:
             current_signal = -1
-            signal_type = "Crossed Below Zero"
+            signal_type = "Bearish Zero Line Crossover"
+            signal_strength = 3
+        
+        # Check for MA crossover signals (medium strength)
+        elif self.df['roc_cross_above_ma'].iloc[-1]:
+            current_signal = 1
+            signal_type = "Bullish MA Crossover"
+            signal_strength = 2
+        elif self.df['roc_cross_below_ma'].iloc[-1]:
+            current_signal = -1
+            signal_type = "Bearish MA Crossover"
             signal_strength = 2
         
-        # Check for extreme values
-        roc_value = self.df['roc'].iloc[-1]
-        if roc_value > 10:
-            current_signal = -1  # Potentially overbought
-            signal_type = "Extremely High Value"
-            signal_strength = 3
-        elif roc_value < -10:
-            current_signal = 1   # Potentially oversold
-            signal_type = "Extremely Low Value"
-            signal_strength = 3
+        # Check current positions (weakest)
+        elif self.df['roc_above_zero'].iloc[-1] and self.df['roc_above_ma'].iloc[-1]:
+            current_signal = 1
+            signal_type = "Bullish"
+            signal_strength = 1
+        elif not self.df['roc_above_zero'].iloc[-1] and not self.df['roc_above_ma'].iloc[-1]:
+            current_signal = -1
+            signal_type = "Bearish"
+            signal_strength = 1
         
         self.indicators['roc'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'roc': round(roc_value, 2) if not pd.isna(roc_value) else None,
-                'trend': 'Bullish' if roc_value > 0 else 'Bearish',
+                'roc': round(self.df['roc'].iloc[-1], 2) if not pd.isna(self.df['roc'].iloc[-1]) else None,
+                'roc_ma': round(self.df['roc_ma'].iloc[-1], 2) if not pd.isna(self.df['roc_ma'].iloc[-1]) else None,
                 'signal_type': signal_type
             }
         }
@@ -3696,7 +3932,7 @@ class TechnicalIndicators:
         # Add to signals list if signal exists
         if current_signal != 0:
             self.signals.append({
-                'indicator': 'Rate of Change',
+                'indicator': 'ROC',
                 'signal': 'BUY' if current_signal == 1 else 'SELL',
                 'strength': signal_strength,
                 'name': signal_type
@@ -3704,86 +3940,118 @@ class TechnicalIndicators:
     
     def calculate_williams_r(self):
         """Calculate Williams %R"""
-        # Get parameters with error handling
-        try:
-            williams_params = self.params.get_indicator_param('williams_r')
-            period = williams_params.get('period', 14)
-            oversold = williams_params.get('oversold', -80)
-            overbought = williams_params.get('overbought', -20)
-        except:
-            period = 14
-            oversold = -80
-            overbought = -20
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for Williams %R! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['williams_r'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
+                
+        # Get parameters
+        period = self.params.get_indicator_param('williams_r_period')
+        overbought = self.params.get_indicator_param('williams_r_overbought')
+        oversold = self.params.get_indicator_param('williams_r_oversold')
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Calculate highest high and lowest low over period
-        highest_high = self.df['high'].rolling(window=period).max()
-        lowest_low = self.df['low'].rolling(window=period).min()
+        # Calculate Williams %R
+        # Williams %R = -100 * ((High(n) - Close) / (High(n) - Low(n)))
+        high_max = self.df['high'].rolling(window=period).max()
+        low_min = self.df['low'].rolling(window=period).min()
         
-        # Calculate Williams %R: ((highest_high - close) / (highest_high - lowest_low)) * -100
         # Handle division by zero
-        range_hl = highest_high - lowest_low
-        range_hl = np.where(range_hl == 0, 0.0001, range_hl)  # Add small value to avoid division by zero
-        williams_r = ((highest_high - self.df['close']) / range_hl) * -100
+        denom = high_max - low_min
+        denom = np.where(denom == 0, 0.0001, denom)  # Avoid division by zero
         
-        new_cols['williams_r'] = pd.Series(williams_r, index=self.df.index)
+        new_cols['williams_r'] = -100 * ((high_max - self.df['close']) / denom)
         
-        # Create temporary DataFrame for signal calculations
-        temp_df = pd.DataFrame(index=self.df.index)
-        temp_df['williams_r'] = new_cols['williams_r']
+        # Calculate overbought/oversold conditions
+        new_cols['williams_r_overbought'] = new_cols['williams_r'] >= overbought
+        new_cols['williams_r_oversold'] = new_cols['williams_r'] <= oversold
         
-        # Generate signals
-        new_cols['williams_oversold'] = temp_df['williams_r'] <= oversold
-        new_cols['williams_overbought'] = temp_df['williams_r'] >= overbought
+        # Calculate exit signals
+        new_cols['williams_r_exit_overbought'] = ((new_cols['williams_r'] < overbought) & 
+                                                (new_cols['williams_r'].shift(1) >= overbought)).astype(int)
         
-        # Detect crosses from oversold/overbought regions
-        new_cols['williams_buy_signal'] = ((temp_df['williams_r'] > oversold) & 
-                                         (temp_df['williams_r'].shift(1) <= oversold)).astype(int)
+        new_cols['williams_r_exit_oversold'] = ((new_cols['williams_r'] > oversold) & 
+                                              (new_cols['williams_r'].shift(1) <= oversold)).astype(int)
         
-        new_cols['williams_sell_signal'] = ((temp_df['williams_r'] < overbought) & 
-                                          (temp_df['williams_r'].shift(1) >= overbought)).astype(int)
+        # Detect trend reversals
+        new_cols['williams_r_bullish_reversal'] = ((new_cols['williams_r'] > new_cols['williams_r'].shift(1)) & 
+                                                (new_cols['williams_r'].shift(1) > new_cols['williams_r'].shift(2)) & 
+                                                (new_cols['williams_r'].shift(2) < new_cols['williams_r'].shift(3)) & 
+                                                (new_cols['williams_r'] < -50)).astype(int)
         
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        new_cols['williams_r_bearish_reversal'] = ((new_cols['williams_r'] < new_cols['williams_r'].shift(1)) & 
+                                                 (new_cols['williams_r'].shift(1) < new_cols['williams_r'].shift(2)) & 
+                                                 (new_cols['williams_r'].shift(2) > new_cols['williams_r'].shift(3)) & 
+                                                 (new_cols['williams_r'] > -50)).astype(int)
+        
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for crosses from oversold/overbought regions
-        if self.df['williams_buy_signal'].iloc[-1] == 1:
+        # Check for exit signals (strongest)
+        if self.df['williams_r_exit_oversold'].iloc[-1] == 1:
             current_signal = 1
-            signal_type = "Cross from Oversold"
-            signal_strength = 2
-        elif self.df['williams_sell_signal'].iloc[-1] == 1:
+            signal_type = "Exit from Oversold"
+            signal_strength = 3
+        elif self.df['williams_r_exit_overbought'].iloc[-1] == 1:
             current_signal = -1
-            signal_type = "Cross from Overbought"
+            signal_type = "Exit from Overbought"
+            signal_strength = 3
+        
+        # Check for reversal patterns (medium strength)
+        elif self.df['williams_r_bullish_reversal'].iloc[-1] == 1:
+            current_signal = 1
+            signal_type = "Bullish Reversal"
+            signal_strength = 2
+        elif self.df['williams_r_bearish_reversal'].iloc[-1] == 1:
+            current_signal = -1
+            signal_type = "Bearish Reversal"
             signal_strength = 2
         
-        # Check for extreme conditions
-        elif self.df['williams_oversold'].iloc[-1] and self.df['williams_r'].iloc[-1] < oversold - 10:
+        # Check for current conditions (weakest)
+        elif self.df['williams_r_oversold'].iloc[-1]:
             current_signal = 1
-            signal_type = "Extremely Oversold"
+            signal_type = "Oversold"
             signal_strength = 1
-        elif self.df['williams_overbought'].iloc[-1] and self.df['williams_r'].iloc[-1] > overbought + 10:
+        elif self.df['williams_r_overbought'].iloc[-1]:
             current_signal = -1
-            signal_type = "Extremely Overbought"
+            signal_type = "Overbought"
             signal_strength = 1
         
-        williams_r_value = self.df['williams_r'].iloc[-1]
         self.indicators['williams_r'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'williams_r': round(williams_r_value, 2) if not pd.isna(williams_r_value) else None,
+                'williams_r': round(self.df['williams_r'].iloc[-1], 2) if not pd.isna(self.df['williams_r'].iloc[-1]) else None,
                 'oversold_threshold': oversold,
                 'overbought_threshold': overbought,
-                'is_oversold': self.df['williams_oversold'].iloc[-1],
-                'is_overbought': self.df['williams_overbought'].iloc[-1],
+                'is_oversold': self.df['williams_r_oversold'].iloc[-1],
+                'is_overbought': self.df['williams_r_overbought'].iloc[-1],
                 'signal_type': signal_type
             }
         }
@@ -4054,139 +4322,134 @@ class TechnicalIndicators:
             })
     
     def calculate_alligator(self):
-        """Calculate Williams Alligator indicator"""
-        # Get parameters with error handling
-        try:
-            jaw_period = self.params.get_indicator_param('alligator_jaw')
-            jaw_offset = self.params.get_indicator_param('alligator_jaw_offset')
-            teeth_period = self.params.get_indicator_param('alligator_teeth')
-            teeth_offset = self.params.get_indicator_param('alligator_teeth_offset')
-            lips_period = self.params.get_indicator_param('alligator_lips')
-            lips_offset = self.params.get_indicator_param('alligator_lips_offset')
-        except:
-            # Default values
-            jaw_period = 13
-            jaw_offset = 8
-            teeth_period = 8
-            teeth_offset = 5
-            lips_period = 5
-            lips_offset = 3
+        """Calculate Williams' Alligator Indicator"""
+        # Check for required columns
+        if 'close' not in self.df.columns:
+            # Check for capitalization variants
+            found = False
+            for col in self.df.columns:
+                if col.lower() == 'close':
+                    self.df['close'] = self.df[col]
+                    found = True
+                    break
+            
+            if not found:
+                error_msg = f"'close' column not found for Alligator! Available columns: {self.df.columns.tolist()}"
+                self.logger.error(error_msg)
+                self.indicators['alligator'] = {
+                    'signal': 0,
+                    'signal_strength': 0,
+                    'error': error_msg,
+                    'values': {}
+                }
+                return
+                
+        # Get parameters
+        jaw_period = self.params.get_indicator_param('alligator_jaw_period')
+        jaw_offset = self.params.get_indicator_param('alligator_jaw_offset')
+        teeth_period = self.params.get_indicator_param('alligator_teeth_period')
+        teeth_offset = self.params.get_indicator_param('alligator_teeth_offset')
+        lips_period = self.params.get_indicator_param('alligator_lips_period')
+        lips_offset = self.params.get_indicator_param('alligator_lips_offset')
         
         # Initialize new columns dictionary
         new_cols = {}
         
         # Calculate median price
-        new_cols['median_price'] = (self.df['high'] + self.df['low']) / 2
+        if 'high' in self.df.columns and 'low' in self.df.columns:
+            median_price = (self.df['high'] + self.df['low']) / 2
+        else:
+            median_price = self.df['close']
         
-        # Calculate jaw (blue line)
-        new_cols['jaw'] = new_cols['median_price'].rolling(window=jaw_period).mean().shift(jaw_offset)
+        # Calculate SMMA (Smoothed Moving Average) for jaw, teeth, and lips
+        jaw = median_price.rolling(window=jaw_period).mean().shift(jaw_offset)
+        teeth = median_price.rolling(window=teeth_period).mean().shift(teeth_offset)
+        lips = median_price.rolling(window=lips_period).mean().shift(lips_offset)
         
-        # Calculate teeth (red line)
-        new_cols['teeth'] = new_cols['median_price'].rolling(window=teeth_period).mean().shift(teeth_offset)
+        new_cols['alligator_jaw'] = jaw
+        new_cols['alligator_teeth'] = teeth
+        new_cols['alligator_lips'] = lips
         
-        # Calculate lips (green line)
-        new_cols['lips'] = new_cols['median_price'].rolling(window=lips_period).mean().shift(lips_offset)
+        # Determine alligator state (sleeping or eating)
+        # Alligator is sleeping when lines are intertwined
+        # Alligator is eating when lines are properly ordered (bullish or bearish)
         
-        # Create temporary dataframe for signal calculations
-        temp_df = pd.DataFrame(index=self.df.index)
-        temp_df['jaw'] = new_cols['jaw']
-        temp_df['teeth'] = new_cols['teeth']
-        temp_df['lips'] = new_cols['lips']
-        temp_df['close'] = self.df['close']
+        # Define bullish and bearish conditions
+        bullish = (lips > teeth) & (teeth > jaw)
+        bearish = (lips < teeth) & (teeth < jaw)
         
-        # Generate signals
-        # Alligator sleeping: lines are intertwined (jaw, teeth, and lips are close together)
-        # Handle NaN values for jaw, teeth, lips
-        jaw_teeth_diff = abs(temp_df['jaw'] - temp_df['teeth'])
-        teeth_lips_diff = abs(temp_df['teeth'] - temp_df['lips'])
+        new_cols['alligator_bullish'] = bullish.astype(int)
+        new_cols['alligator_bearish'] = bearish.astype(int)
         
-        # Create masks with NaN protection
-        jaw_teeth_close = jaw_teeth_diff < 0.03 * temp_df['close']
-        teeth_lips_close = teeth_lips_diff < 0.03 * temp_df['close']
+        # Determine when fractal formations occur above or below the alligator's mouth
+        # This is a complex calculation but for now a simple approximation
+        above_jaw = self.df['close'] > jaw
+        below_jaw = self.df['close'] < jaw
         
-        # Combine masks with NaN protection
-        new_cols['alligator_sleeping'] = jaw_teeth_close & teeth_lips_close
+        # Consider price crossing the alligator's mouth (jaw) as a potential signal
+        cross_above_jaw = (above_jaw & ~above_jaw.shift(1)).astype(int)
+        cross_below_jaw = (below_jaw & ~below_jaw.shift(1)).astype(int)
         
-        # Alligator awakening: lips cross above teeth and then teeth cross above jaw
-        lips_above_teeth = temp_df['lips'] > temp_df['teeth']
-        lips_above_teeth_prev = temp_df['lips'].shift(1) <= temp_df['teeth'].shift(1)
-        lips_cross_above_teeth = lips_above_teeth & lips_above_teeth_prev
+        new_cols['alligator_cross_above_jaw'] = cross_above_jaw
+        new_cols['alligator_cross_below_jaw'] = cross_below_jaw
         
-        teeth_above_jaw = temp_df['teeth'] > temp_df['jaw']
-        teeth_above_jaw_prev = temp_df['teeth'].shift(1) <= temp_df['jaw'].shift(1)
-        teeth_cross_above_jaw = teeth_above_jaw & teeth_above_jaw_prev
-        
-        new_cols['alligator_awakening_bullish'] = lips_cross_above_teeth & teeth_cross_above_jaw
-        
-        # Alligator eating: lines are properly aligned (lips > teeth > jaw)
-        new_cols['alligator_eating_bullish'] = (temp_df['lips'] > temp_df['teeth']) & (temp_df['teeth'] > temp_df['jaw'])
-        
-        # Alligator going to sleep: lines start to intertwine after being aligned
-        eating_bullish = new_cols['alligator_eating_bullish']
-        eating_bullish_prev = eating_bullish.shift(1)
-        new_cols['alligator_sated'] = ~eating_bullish & eating_bullish_prev
-        
-        # Bearish equivalents
-        lips_below_teeth = temp_df['lips'] < temp_df['teeth']
-        lips_below_teeth_prev = temp_df['lips'].shift(1) >= temp_df['teeth'].shift(1)
-        lips_cross_below_teeth = lips_below_teeth & lips_below_teeth_prev
-        
-        teeth_below_jaw = temp_df['teeth'] < temp_df['jaw']
-        teeth_below_jaw_prev = temp_df['teeth'].shift(1) >= temp_df['jaw'].shift(1)
-        teeth_cross_below_jaw = teeth_below_jaw & teeth_below_jaw_prev
-        
-        new_cols['alligator_awakening_bearish'] = lips_cross_below_teeth & teeth_cross_below_jaw
-        
-        new_cols['alligator_eating_bearish'] = (temp_df['lips'] < temp_df['teeth']) & (temp_df['teeth'] < temp_df['jaw'])
-        
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for alligator states
-        if self.df['alligator_awakening_bullish'].iloc[-1]:
+        # Check for awakening alligator - jaw, teeth, and lips untangling
+        awakening_bullish = (self.df['alligator_bullish'].iloc[-1] == 1) and (self.df['alligator_bullish'].iloc[-5:].sum() == 1)
+        awakening_bearish = (self.df['alligator_bearish'].iloc[-1] == 1) and (self.df['alligator_bearish'].iloc[-5:].sum() == 1)
+        
+        # Check for price crossing jaw
+        recent_cross_above = self.df['alligator_cross_above_jaw'].iloc[-3:].sum() > 0
+        recent_cross_below = self.df['alligator_cross_below_jaw'].iloc[-3:].sum() > 0
+        
+        # Current state of lines
+        current_bullish = self.df['alligator_bullish'].iloc[-1] == 1
+        current_bearish = self.df['alligator_bearish'].iloc[-1] == 1
+        
+        # Generate signals with priorities
+        if awakening_bullish:
             current_signal = 1
             signal_type = "Alligator Awakening (Bullish)"
             signal_strength = 3
-        elif self.df['alligator_awakening_bearish'].iloc[-1]:
+        elif awakening_bearish:
             current_signal = -1
             signal_type = "Alligator Awakening (Bearish)"
             signal_strength = 3
-        elif self.df['alligator_eating_bullish'].iloc[-1]:
+        elif recent_cross_above and current_bullish:
+            current_signal = 1
+            signal_type = "Price Above Jaw (Bullish)"
+            signal_strength = 2
+        elif recent_cross_below and current_bearish:
+            current_signal = -1
+            signal_type = "Price Below Jaw (Bearish)"
+            signal_strength = 2
+        elif current_bullish:
             current_signal = 1
             signal_type = "Alligator Eating (Bullish)"
-            signal_strength = 2
-        elif self.df['alligator_eating_bearish'].iloc[-1]:
+            signal_strength = 1
+        elif current_bearish:
             current_signal = -1
             signal_type = "Alligator Eating (Bearish)"
-            signal_strength = 2
-        elif self.df['alligator_sated'].iloc[-1]:
-            # No signal when alligator is going to sleep (end of trend)
-            signal_type = "Alligator Sated (End of Trend)"
-        elif self.df['alligator_sleeping'].iloc[-1]:
-            signal_type = "Alligator Sleeping (No Trend)"
-        
-        # Handle NaN values for indicator output
-        jaw_value = self.df['jaw'].iloc[-1]
-        teeth_value = self.df['teeth'].iloc[-1]
-        lips_value = self.df['lips'].iloc[-1]
+            signal_strength = 1
         
         self.indicators['alligator'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'jaw': round(jaw_value, 2) if not pd.isna(jaw_value) else None,
-                'teeth': round(teeth_value, 2) if not pd.isna(teeth_value) else None,
-                'lips': round(lips_value, 2) if not pd.isna(lips_value) else None,
-                'state': signal_type,
-                'is_sleeping': bool(self.df['alligator_sleeping'].iloc[-1]) if not pd.isna(self.df['alligator_sleeping'].iloc[-1]) else False,
-                'is_eating_bullish': bool(self.df['alligator_eating_bullish'].iloc[-1]) if not pd.isna(self.df['alligator_eating_bullish'].iloc[-1]) else False,
-                'is_eating_bearish': bool(self.df['alligator_eating_bearish'].iloc[-1]) if not pd.isna(self.df['alligator_eating_bearish'].iloc[-1]) else False
+                'jaw': round(self.df['alligator_jaw'].iloc[-1], 2) if not pd.isna(self.df['alligator_jaw'].iloc[-1]) else None,
+                'teeth': round(self.df['alligator_teeth'].iloc[-1], 2) if not pd.isna(self.df['alligator_teeth'].iloc[-1]) else None,
+                'lips': round(self.df['alligator_lips'].iloc[-1], 2) if not pd.isna(self.df['alligator_lips'].iloc[-1]) else None,
+                'state': 'Sleeping' if not (current_bullish or current_bearish) else 
+                        'Eating (Bullish)' if current_bullish else 'Eating (Bearish)',
+                'signal_type': signal_type
             }
         }
         
@@ -4201,176 +4464,153 @@ class TechnicalIndicators:
     
     def calculate_cpr(self):
         """Calculate Central Pivot Range (CPR)"""
-        # Get parameters with error handling
-        try:
-            use_previous_day = self.params.get_indicator_param('cpr_use_previous_day')
-        except:
-            use_previous_day = True  # Default value
+        # Check for required columns
+        required_cols = ['high', 'low', 'close']
+        for col in required_cols:
+            if col not in self.df.columns:
+                # Check for capitalization variants
+                found = False
+                for df_col in self.df.columns:
+                    if df_col.lower() == col:
+                        self.df[col] = self.df[df_col]
+                        found = True
+                        break
+                
+                if not found:
+                    error_msg = f"'{col}' column not found for CPR! Available columns: {self.df.columns.tolist()}"
+                    self.logger.error(error_msg)
+                    self.indicators['cpr'] = {
+                        'signal': 0,
+                        'signal_strength': 0,
+                        'error': error_msg,
+                        'values': {}
+                    }
+                    return
         
         # Initialize new columns dictionary
         new_cols = {}
         
-        # Initialize arrays for pivot points
-        pivot_values = np.full(len(self.df), np.nan)
-        bc_values = np.full(len(self.df), np.nan)
-        tc_values = np.full(len(self.df), np.nan)
-        
-        # Calculate pivot points for each day (or period)
-        # If index is datetime, use date grouping
-        if pd.api.types.is_datetime64_any_dtype(self.df.index):
-            # Group by date
-            unique_dates = pd.Series(self.df.index.date).unique()
+        # Function to calculate CPR for previous period (1 day)
+        def calculate_daily_cpr(df, index):
+            if index <= 0:
+                return None, None, None
             
-            for date in unique_dates:
-                # Create a boolean mask for this date
-                date_mask = [d.date() == date for d in self.df.index]
-                date_indices = np.where(date_mask)[0]
-                
-                if len(date_indices) == 0:
-                    continue
-                    
-                # Extract data for this day
-                day_data = self.df.iloc[date_indices]
-                
-                # Calculate pivot points for this day
-                high = day_data['high'].max()
-                low = day_data['low'].min()
-                close = day_data['close'].iloc[-1]
-                
-                # Central Pivot Range calculation
-                pivot = (high + low + close) / 3
-                bc = (high + low) / 2
-                tc = (pivot - bc) + pivot
-                
-                if use_previous_day:
-                    # Find next day's indices
-                    next_day_indices = []
-                    for future_date in unique_dates:
-                        if future_date > date:
-                            future_mask = [d.date() == future_date for d in self.df.index]
-                            next_day_indices.extend(np.where(future_mask)[0])
-                            break
-                    
-                    # Assign to next day's rows if available
-                    if next_day_indices:
-                        for idx in next_day_indices:
-                            pivot_values[idx] = pivot
-                            bc_values[idx] = bc
-                            tc_values[idx] = tc
-                else:
-                    # Assign to current day's rows
-                    for idx in date_indices:
-                        pivot_values[idx] = pivot
-                        bc_values[idx] = bc
-                        tc_values[idx] = tc
-        else:
-            # If not datetime index, use a rolling window approach
-            window_size = 20  # Default window size
+            high = df['high'].iloc[index-1]
+            low = df['low'].iloc[index-1]
+            close = df['close'].iloc[index-1]
             
-            for i in range(window_size, len(self.df)):
-                # Get data from previous window
-                prev_window = self.df.iloc[i-window_size:i]
-                high = prev_window['high'].max()
-                low = prev_window['low'].min()
-                close = prev_window['close'].iloc[-1]
-                
-                # Calculate CPR
-                pivot = (high + low + close) / 3
-                bc = (high + low) / 2
-                tc = (pivot - bc) + pivot
-                
-                # Assign to current row
-                pivot_values[i] = pivot
-                bc_values[i] = bc
-                tc_values[i] = tc
+            pivot = (high + low + close) / 3
+            bc = (high + low) / 2
+            tc = (pivot - bc) + pivot
+            
+            return pivot, bc, tc
         
-        # Add calculated pivot values to new columns dictionary
-        new_cols['pivot'] = pd.Series(pivot_values, index=self.df.index)
-        new_cols['bc'] = pd.Series(bc_values, index=self.df.index)
-        new_cols['tc'] = pd.Series(tc_values, index=self.df.index)
+        # Calculate CPR values for each day
+        pivots = []
+        bcs = []
+        tcs = []
+        for i in range(len(self.df)):
+            pivot, bc, tc = calculate_daily_cpr(self.df, i)
+            pivots.append(pivot)
+            bcs.append(bc)
+            tcs.append(tc)
         
-        # Create temporary dataframe for signal calculations
-        temp_df = pd.DataFrame(index=self.df.index)
-        temp_df['pivot'] = new_cols['pivot']
-        temp_df['bc'] = new_cols['bc']
-        temp_df['tc'] = new_cols['tc']
-        temp_df['close'] = self.df['close']
+        new_cols['cpr_pivot'] = pd.Series(pivots, index=self.df.index)
+        new_cols['cpr_bc'] = pd.Series(bcs, index=self.df.index)
+        new_cols['cpr_tc'] = pd.Series(tcs, index=self.df.index)
         
-        # Calculate width of CPR with division by zero protection
-        pivot_non_zero = np.where(temp_df['pivot'] == 0, 0.0001, temp_df['pivot'])
-        cpr_width = (temp_df['tc'] - temp_df['bc']) / pivot_non_zero * 100
+        # Calculate CPR width (normalized by price)
+        non_null_mask = (~pd.isna(new_cols['cpr_tc'])) & (~pd.isna(new_cols['cpr_bc']))
+        cpr_width = np.zeros(len(self.df))
+        
+        for i in range(len(self.df)):
+            if non_null_mask[i] and self.df['close'].iloc[i] > 0:
+                cpr_width[i] = 100 * abs(new_cols['cpr_tc'][i] - new_cols['cpr_bc'][i]) / self.df['close'].iloc[i]
+        
         new_cols['cpr_width'] = pd.Series(cpr_width, index=self.df.index)
         
-        # Narrow CPR indicates potential breakout - with NaN handling
-        cpr_width_ma = new_cols['cpr_width'].rolling(window=20).mean()
-        cpr_width_ma_non_zero = np.where(cpr_width_ma == 0, 0.0001, cpr_width_ma)
+        # Calculate if price is above or below CPR
+        price_above_cpr = np.zeros(len(self.df))
+        price_below_cpr = np.zeros(len(self.df))
         
-        # Calculate narrow and wide CPR indicators
-        new_cols['narrow_cpr'] = new_cols['cpr_width'] < (cpr_width_ma * 0.7)
-        new_cols['wide_cpr'] = new_cols['cpr_width'] > (cpr_width_ma * 1.3)
+        for i in range(len(self.df)):
+            if non_null_mask[i]:
+                if self.df['close'].iloc[i] > new_cols['cpr_tc'][i]:
+                    price_above_cpr[i] = 1
+                elif self.df['close'].iloc[i] < new_cols['cpr_bc'][i]:
+                    price_below_cpr[i] = 1
         
-        # Price breaking above/below CPR
-        new_cols['break_above_cpr'] = ((temp_df['close'] > temp_df['tc']) & 
-                                     (temp_df['close'].shift(1) <= temp_df['tc'])).astype(int)
+        new_cols['price_above_cpr'] = pd.Series(price_above_cpr, index=self.df.index).astype(int)
+        new_cols['price_below_cpr'] = pd.Series(price_below_cpr, index=self.df.index).astype(int)
         
-        new_cols['break_below_cpr'] = ((temp_df['close'] < temp_df['bc']) & 
-                                     (temp_df['close'].shift(1) >= temp_df['bc'])).astype(int)
-        
-        # Add all new columns to DataFrame at once
-        for col_name, col_data in new_cols.items():
-            self.df[col_name] = col_data
+        # Fix fragmentation: Add all columns at once
+        new_df = pd.DataFrame(new_cols, index=self.df.index)
+        self.df = pd.concat([self.df, new_df], axis=1)
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
-        # Check for breakouts
-        if self.df['break_above_cpr'].iloc[-1] == 1:
+        # Get latest complete CPR
+        latest_pivot = self.df['cpr_pivot'].iloc[-1]
+        latest_bc = self.df['cpr_bc'].iloc[-1]
+        latest_tc = self.df['cpr_tc'].iloc[-1]
+        
+        if pd.isna(latest_pivot) or pd.isna(latest_bc) or pd.isna(latest_tc):
+            self.indicators['cpr'] = {
+                'signal': 0,
+                'signal_strength': 0,
+                'values': {
+                    'pivot': None,
+                    'bc': None,
+                    'tc': None,
+                    'width': None,
+                    'price_location': None,
+                    'signal_type': "Insufficient data for CPR calculation"
+                }
+            }
+            return
+        
+        # Current price relative to CPR
+        current_price = self.df['close'].iloc[-1]
+        
+        # Check if price breaks above or below CPR
+        break_above = (self.df['price_above_cpr'].iloc[-1] == 1) and (self.df['price_above_cpr'].iloc[-2] == 0)
+        break_below = (self.df['price_below_cpr'].iloc[-1] == 1) and (self.df['price_below_cpr'].iloc[-2] == 0)
+        
+        # CPR width indicates volatility
+        current_width = self.df['cpr_width'].iloc[-1]
+        narrow_cpr = current_width < 0.5  # arbitrary threshold, adjust as needed
+        
+        # Generate signals
+        if break_above:
             current_signal = 1
-            signal_type = "Price Broke Above CPR"
+            signal_type = "Bullish CPR Breakout"
             signal_strength = 2
-        elif self.df['break_below_cpr'].iloc[-1] == 1:
+        elif break_below:
             current_signal = -1
-            signal_type = "Price Broke Below CPR"
+            signal_type = "Bearish CPR Breakout"
             signal_strength = 2
+        # Narrow CPR with price near pivot suggests potential breakout
+        elif narrow_cpr and abs(current_price - latest_pivot) / current_price < 0.01:
+            current_signal = 0
+            signal_type = "Narrow CPR - Potential Breakout"
+            signal_strength = 1
         
-        # Check price position relative to CPR
-        else:
-            if not pd.isna(self.df['tc'].iloc[-1]) and not pd.isna(self.df['bc'].iloc[-1]):
-                if self.df['close'].iloc[-1] > self.df['tc'].iloc[-1]:
-                    current_signal = 1
-                    signal_type = "Price Above CPR"
-                    signal_strength = 1
-                elif self.df['close'].iloc[-1] < self.df['bc'].iloc[-1]:
-                    current_signal = -1
-                    signal_type = "Price Below CPR"
-                    signal_strength = 1
-                else:
-                    signal_type = "Price Within CPR"
+        price_location = "Above CPR" if current_price > latest_tc else \
+                        "Below CPR" if current_price < latest_bc else \
+                        "Within CPR"
         
-        # Check for narrow CPR (potential for breakout)
-        if not pd.isna(self.df['narrow_cpr'].iloc[-1]) and self.df['narrow_cpr'].iloc[-1]:
-            signal_type += " (Narrow CPR)"
-            signal_strength += 1
-        
-        # Get the final CPR values safely
-        pivot_value = self.df['pivot'].iloc[-1]
-        bc_value = self.df['bc'].iloc[-1]
-        tc_value = self.df['tc'].iloc[-1]
-        cpr_width_value = self.df['cpr_width'].iloc[-1]
-        
-        # Generate indicator result with NaN handling
         self.indicators['cpr'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'pivot': round(pivot_value, 2) if not pd.isna(pivot_value) else None,
-                'bc': round(bc_value, 2) if not pd.isna(bc_value) else None,
-                'tc': round(tc_value, 2) if not pd.isna(tc_value) else None,
-                'width': round(cpr_width_value, 2) if not pd.isna(cpr_width_value) else None,
-                'is_narrow': bool(self.df['narrow_cpr'].iloc[-1]) if not pd.isna(self.df['narrow_cpr'].iloc[-1]) else False,
-                'is_wide': bool(self.df['wide_cpr'].iloc[-1]) if not pd.isna(self.df['wide_cpr'].iloc[-1]) else False,
+                'pivot': round(latest_pivot, 2),
+                'bc': round(latest_bc, 2),
+                'tc': round(latest_tc, 2),
+                'width': round(current_width, 2),
+                'price_location': price_location,
                 'signal_type': signal_type
             }
         }
@@ -4378,7 +4618,7 @@ class TechnicalIndicators:
         # Add to signals list if signal exists
         if current_signal != 0:
             self.signals.append({
-                'indicator': 'Central Pivot Range',
+                'indicator': 'CPR',
                 'signal': 'BUY' if current_signal == 1 else 'SELL',
                 'strength': signal_strength,
                 'name': signal_type
