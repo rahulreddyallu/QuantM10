@@ -6252,7 +6252,9 @@ class TradingSignalBot:
                 self.logger.warning("Upstox client not found, attempting to initialize")
                 
                 # Initialize client
-                from upstox_client.api import ApiClient, MarketQuoteApi, HistoryApi
+                from upstox_client.api_client import ApiClient
+                from upstox_client.api.login_api import LoginApi
+                from upstox_client.api.market_quote_api import MarketQuoteApi
                 
                 api_client = ApiClient()
                 
