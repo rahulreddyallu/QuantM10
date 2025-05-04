@@ -3444,40 +3444,64 @@ class TechnicalIndicators:
         if 'rsi' not in self.df.columns:
             self.calculate_rsi()
             
-        # Get parameters
-        period = self.params.get_indicator_param('stochastic_rsi')['period']
-        smooth_k = self.params.get_indicator_param('stochastic_rsi')['smooth_k']
-        smooth_d = self.params.get_indicator_param('stochastic_rsi')['smooth_d']
-        oversold = self.params.get_indicator_param('stochastic_rsi')['oversold']
-        overbought = self.params.get_indicator_param('stochastic_rsi')['overbought']
+        # Get parameters with error handling
+        try:
+            stoch_rsi_params = self.params.get_indicator_param('stochastic_rsi')
+            period = stoch_rsi_params.get('period', 14)
+            smooth_k = stoch_rsi_params.get('smooth_k', 3)
+            smooth_d = stoch_rsi_params.get('smooth_d', 3)
+            oversold = stoch_rsi_params.get('oversold', 20)
+            overbought = stoch_rsi_params.get('overbought', 80)
+        except:
+            # Default values if parameters can't be retrieved
+            period = 14
+            smooth_k = 3
+            smooth_d = 3
+            oversold = 20
+            overbought = 80
         
-        # Calculate Stochastic RSI
-        # First find the lowest low and highest high of RSI within the period
+        # Initialize new columns dictionary
+        new_cols = {}
+        
+        # Calculate Stochastic RSI components
         lowest_rsi = self.df['rsi'].rolling(window=period).min()
         highest_rsi = self.df['rsi'].rolling(window=period).max()
         
-        # Calculate raw K (current RSI relative to its range)
-        self.df['stoch_rsi_k_raw'] = 100 * (self.df['rsi'] - lowest_rsi) / (highest_rsi - lowest_rsi)
+        # Calculate raw K with division by zero protection
+        rsi_range = highest_rsi - lowest_rsi
+        rsi_range = np.where(rsi_range == 0, 0.0001, rsi_range)  # Add small value to avoid division by zero
+        stoch_rsi_k_raw = 100 * (self.df['rsi'] - lowest_rsi) / rsi_range
+        
+        new_cols['stoch_rsi_k_raw'] = pd.Series(stoch_rsi_k_raw, index=self.df.index)
         
         # Smooth K
-        self.df['stoch_rsi_k'] = self.df['stoch_rsi_k_raw'].rolling(window=smooth_k).mean()
+        new_cols['stoch_rsi_k'] = new_cols['stoch_rsi_k_raw'].rolling(window=smooth_k).mean()
         
         # Calculate D (moving average of K)
-        self.df['stoch_rsi_d'] = self.df['stoch_rsi_k'].rolling(window=smooth_d).mean()
+        new_cols['stoch_rsi_d'] = new_cols['stoch_rsi_k'].rolling(window=smooth_d).mean()
+        
+        # Create temporary DataFrame for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['stoch_rsi_k'] = new_cols['stoch_rsi_k']
+        temp_df['stoch_rsi_d'] = new_cols['stoch_rsi_d']
         
         # Generate signals
-        self.df['stoch_rsi_oversold'] = self.df['stoch_rsi_k'] < oversold
-        self.df['stoch_rsi_overbought'] = self.df['stoch_rsi_k'] > overbought
+        new_cols['stoch_rsi_oversold'] = temp_df['stoch_rsi_k'] < oversold
+        new_cols['stoch_rsi_overbought'] = temp_df['stoch_rsi_k'] > overbought
         
         # Detect K crossing above D from oversold region
-        self.df['stoch_rsi_buy_signal'] = ((self.df['stoch_rsi_k'] > self.df['stoch_rsi_d']) & 
-                                         (self.df['stoch_rsi_k'].shift(1) <= self.df['stoch_rsi_d'].shift(1)) &
-                                         (self.df['stoch_rsi_k'] < 30)).astype(int)
+        new_cols['stoch_rsi_buy_signal'] = ((temp_df['stoch_rsi_k'] > temp_df['stoch_rsi_d']) & 
+                                          (temp_df['stoch_rsi_k'].shift(1) <= temp_df['stoch_rsi_d'].shift(1)) &
+                                          (temp_df['stoch_rsi_k'] < 30)).astype(int)
         
         # Detect K crossing below D from overbought region
-        self.df['stoch_rsi_sell_signal'] = ((self.df['stoch_rsi_k'] < self.df['stoch_rsi_d']) & 
-                                          (self.df['stoch_rsi_k'].shift(1) >= self.df['stoch_rsi_d'].shift(1)) &
-                                          (self.df['stoch_rsi_k'] > 70)).astype(int)
+        new_cols['stoch_rsi_sell_signal'] = ((temp_df['stoch_rsi_k'] < temp_df['stoch_rsi_d']) & 
+                                           (temp_df['stoch_rsi_k'].shift(1) >= temp_df['stoch_rsi_d'].shift(1)) &
+                                           (temp_df['stoch_rsi_k'] > 70)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3529,23 +3553,43 @@ class TechnicalIndicators:
     
     def calculate_rate_of_change(self):
         """Calculate Rate of Change (ROC)"""
-        # Get parameters
-        period = self.params.get_indicator_param('roc_period')
+        # Get parameters with error handling
+        try:
+            period = self.params.get_indicator_param('roc_period')
+        except:
+            period = 14  # Default if not specified
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate ROC: ((current_price - price_n_periods_ago) / price_n_periods_ago) * 100
-        self.df['roc'] = ((self.df['close'] - self.df['close'].shift(period)) / 
-                         self.df['close'].shift(period)) * 100
+        # Handle division by zero
+        shifted_price = self.df['close'].shift(period)
+        shifted_price_non_zero = np.where(shifted_price == 0, 0.0001, shifted_price)  # Avoid division by zero
+        roc = ((self.df['close'] - shifted_price) / shifted_price_non_zero) * 100
         
-        # Generate signals
-        self.df['roc_signal'] = 0
-        self.df.loc[self.df['roc'] > 0, 'roc_signal'] = 1
-        self.df.loc[self.df['roc'] < 0, 'roc_signal'] = -1
+        new_cols['roc'] = pd.Series(roc, index=self.df.index)
+        
+        # Generate signals using NumPy for performance
+        roc_signal = np.zeros(len(self.df))
+        roc_signal[roc > 0] = 1
+        roc_signal[roc < 0] = -1
+        
+        new_cols['roc_signal'] = pd.Series(roc_signal, index=self.df.index)
+        
+        # Convert to Series for shift operation
+        roc_signal_series = pd.Series(roc_signal, index=self.df.index)
         
         # Detect crossovers
-        self.df['roc_buy_signal'] = ((self.df['roc_signal'] == 1) & 
-                                    (self.df['roc_signal'].shift(1) == -1)).astype(int)
-        self.df['roc_sell_signal'] = ((self.df['roc_signal'] == -1) & 
-                                     (self.df['roc_signal'].shift(1) == 1)).astype(int)
+        new_cols['roc_buy_signal'] = ((roc_signal_series == 1) & 
+                                    (roc_signal_series.shift(1) == -1)).astype(int)
+        
+        new_cols['roc_sell_signal'] = ((roc_signal_series == -1) & 
+                                     (roc_signal_series.shift(1) == 1)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3577,7 +3621,7 @@ class TechnicalIndicators:
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'roc': round(roc_value, 2),
+                'roc': round(roc_value, 2) if not pd.isna(roc_value) else None,
                 'trend': 'Bullish' if roc_value > 0 else 'Bearish',
                 'signal_type': signal_type
             }
@@ -3594,28 +3638,50 @@ class TechnicalIndicators:
     
     def calculate_williams_r(self):
         """Calculate Williams %R"""
-        # Get parameters
-        period = self.params.get_indicator_param('williams_r')['period']
-        oversold = self.params.get_indicator_param('williams_r')['oversold']
-        overbought = self.params.get_indicator_param('williams_r')['overbought']
+        # Get parameters with error handling
+        try:
+            williams_params = self.params.get_indicator_param('williams_r')
+            period = williams_params.get('period', 14)
+            oversold = williams_params.get('oversold', -80)
+            overbought = williams_params.get('overbought', -20)
+        except:
+            period = 14
+            oversold = -80
+            overbought = -20
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate highest high and lowest low over period
         highest_high = self.df['high'].rolling(window=period).max()
         lowest_low = self.df['low'].rolling(window=period).min()
         
         # Calculate Williams %R: ((highest_high - close) / (highest_high - lowest_low)) * -100
-        self.df['williams_r'] = ((highest_high - self.df['close']) / 
-                                (highest_high - lowest_low)) * -100
+        # Handle division by zero
+        range_hl = highest_high - lowest_low
+        range_hl = np.where(range_hl == 0, 0.0001, range_hl)  # Add small value to avoid division by zero
+        williams_r = ((highest_high - self.df['close']) / range_hl) * -100
+        
+        new_cols['williams_r'] = pd.Series(williams_r, index=self.df.index)
+        
+        # Create temporary DataFrame for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['williams_r'] = new_cols['williams_r']
         
         # Generate signals
-        self.df['williams_oversold'] = self.df['williams_r'] <= oversold
-        self.df['williams_overbought'] = self.df['williams_r'] >= overbought
+        new_cols['williams_oversold'] = temp_df['williams_r'] <= oversold
+        new_cols['williams_overbought'] = temp_df['williams_r'] >= overbought
         
         # Detect crosses from oversold/overbought regions
-        self.df['williams_buy_signal'] = ((self.df['williams_r'] > oversold) & 
-                                        (self.df['williams_r'].shift(1) <= oversold)).astype(int)
-        self.df['williams_sell_signal'] = ((self.df['williams_r'] < overbought) & 
-                                         (self.df['williams_r'].shift(1) >= overbought)).astype(int)
+        new_cols['williams_buy_signal'] = ((temp_df['williams_r'] > oversold) & 
+                                         (temp_df['williams_r'].shift(1) <= oversold)).astype(int)
+        
+        new_cols['williams_sell_signal'] = ((temp_df['williams_r'] < overbought) & 
+                                          (temp_df['williams_r'].shift(1) >= overbought)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3642,11 +3708,12 @@ class TechnicalIndicators:
             signal_type = "Extremely Overbought"
             signal_strength = 1
         
+        williams_r_value = self.df['williams_r'].iloc[-1]
         self.indicators['williams_r'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'williams_r': round(self.df['williams_r'].iloc[-1], 2),
+                'williams_r': round(williams_r_value, 2) if not pd.isna(williams_r_value) else None,
                 'oversold_threshold': oversold,
                 'overbought_threshold': overbought,
                 'is_oversold': self.df['williams_oversold'].iloc[-1],
@@ -3666,53 +3733,89 @@ class TechnicalIndicators:
     
     def calculate_ultimate_oscillator(self):
         """Calculate Ultimate Oscillator"""
-        # Get parameters
-        period1 = self.params.get_indicator_param('ultimate_oscillator')['period1']
-        period2 = self.params.get_indicator_param('ultimate_oscillator')['period2']
-        period3 = self.params.get_indicator_param('ultimate_oscillator')['period3']
-        weight1 = self.params.get_indicator_param('ultimate_oscillator')['weight1']
-        weight2 = self.params.get_indicator_param('ultimate_oscillator')['weight2']
-        weight3 = self.params.get_indicator_param('ultimate_oscillator')['weight3']
-        oversold = self.params.get_indicator_param('ultimate_oscillator')['oversold']
-        overbought = self.params.get_indicator_param('ultimate_oscillator')['overbought']
+        # Get parameters with error handling
+        try:
+            uo_params = self.params.get_indicator_param('ultimate_oscillator')
+            period1 = uo_params.get('period1', 7)
+            period2 = uo_params.get('period2', 14)
+            period3 = uo_params.get('period3', 28)
+            weight1 = uo_params.get('weight1', 4)
+            weight2 = uo_params.get('weight2', 2)
+            weight3 = uo_params.get('weight3', 1)
+            oversold = uo_params.get('oversold', 30)
+            overbought = uo_params.get('overbought', 70)
+        except:
+            # Default values if parameters can't be retrieved
+            period1 = 7
+            period2 = 14
+            period3 = 28
+            weight1 = 4
+            weight2 = 2
+            weight3 = 1
+            oversold = 30
+            overbought = 70
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate buying pressure (close - min(low, prior_close))
-        self.df['bp'] = self.df['close'] - self.df[['low', 'close']].shift(1).min(axis=1)
+        prior_close = self.df['close'].shift(1)
+        low_vs_prior = pd.concat([self.df['low'], prior_close], axis=1).min(axis=1)
+        new_cols['bp'] = self.df['close'] - low_vs_prior
         
         # Calculate true range (max(high, prior_close) - min(low, prior_close))
-        self.df['tr'] = self.df[['high', 'close']].shift(1).max(axis=1) - self.df[['low', 'close']].shift(1).min(axis=1)
+        high_vs_prior = pd.concat([self.df['high'], prior_close], axis=1).max(axis=1)
+        new_cols['tr'] = high_vs_prior - low_vs_prior
         
         # Calculate average buying pressure for each period
-        self.df['avg_bp1'] = self.df['bp'].rolling(window=period1).sum()
-        self.df['avg_bp2'] = self.df['bp'].rolling(window=period2).sum()
-        self.df['avg_bp3'] = self.df['bp'].rolling(window=period3).sum()
+        new_cols['avg_bp1'] = new_cols['bp'].rolling(window=period1).sum()
+        new_cols['avg_bp2'] = new_cols['bp'].rolling(window=period2).sum()
+        new_cols['avg_bp3'] = new_cols['bp'].rolling(window=period3).sum()
         
         # Calculate average true range for each period
-        self.df['avg_tr1'] = self.df['tr'].rolling(window=period1).sum()
-        self.df['avg_tr2'] = self.df['tr'].rolling(window=period2).sum()
-        self.df['avg_tr3'] = self.df['tr'].rolling(window=period3).sum()
+        new_cols['avg_tr1'] = new_cols['tr'].rolling(window=period1).sum()
+        new_cols['avg_tr2'] = new_cols['tr'].rolling(window=period2).sum()
+        new_cols['avg_tr3'] = new_cols['tr'].rolling(window=period3).sum()
         
-        # Calculate the three raw components
-        # Avoid division by zero
-        self.df['raw_uosc1'] = np.where(self.df['avg_tr1'] != 0, 100 * self.df['avg_bp1'] / self.df['avg_tr1'], 50)
-        self.df['raw_uosc2'] = np.where(self.df['avg_tr2'] != 0, 100 * self.df['avg_bp2'] / self.df['avg_tr2'], 50)
-        self.df['raw_uosc3'] = np.where(self.df['avg_tr3'] != 0, 100 * self.df['avg_bp3'] / self.df['avg_tr3'], 50)
+        # Create temporary dataframe for calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        for col in ['avg_bp1', 'avg_bp2', 'avg_bp3', 'avg_tr1', 'avg_tr2', 'avg_tr3']:
+            temp_df[col] = new_cols[col]
+        
+        # Calculate the three raw components with division by zero protection
+        # Raw UO = (Average BP / Average TR) * 100
+        avg_tr1_non_zero = np.where(temp_df['avg_tr1'] == 0, 0.0001, temp_df['avg_tr1'])
+        avg_tr2_non_zero = np.where(temp_df['avg_tr2'] == 0, 0.0001, temp_df['avg_tr2'])
+        avg_tr3_non_zero = np.where(temp_df['avg_tr3'] == 0, 0.0001, temp_df['avg_tr3'])
+        
+        new_cols['raw_uosc1'] = 100 * temp_df['avg_bp1'] / avg_tr1_non_zero
+        new_cols['raw_uosc2'] = 100 * temp_df['avg_bp2'] / avg_tr2_non_zero
+        new_cols['raw_uosc3'] = 100 * temp_df['avg_bp3'] / avg_tr3_non_zero
         
         # Calculate Ultimate Oscillator
         total_weight = weight1 + weight2 + weight3
-        self.df['uosc'] = (weight1 * self.df['raw_uosc1'] + 
-                          weight2 * self.df['raw_uosc2'] + 
-                          weight3 * self.df['raw_uosc3']) / total_weight
+        new_cols['uosc'] = (weight1 * new_cols['raw_uosc1'] + 
+                           weight2 * new_cols['raw_uosc2'] + 
+                           weight3 * new_cols['raw_uosc3']) / total_weight
+        
+        # Create another temporary dataframe for signal calculations
+        signal_df = pd.DataFrame(index=self.df.index)
+        signal_df['uosc'] = new_cols['uosc']
         
         # Generate signals
-        self.df['uosc_oversold'] = self.df['uosc'] < oversold
-        self.df['uosc_overbought'] = self.df['uosc'] > overbought
+        new_cols['uosc_oversold'] = signal_df['uosc'] < oversold
+        new_cols['uosc_overbought'] = signal_df['uosc'] > overbought
         
         # Detect crosses from oversold/overbought regions
-        self.df['uosc_buy_signal'] = ((self.df['uosc'] > oversold) & 
-                                    (self.df['uosc'].shift(1) <= oversold)).astype(int)
-        self.df['uosc_sell_signal'] = ((self.df['uosc'] < overbought) & 
-                                     (self.df['uosc'].shift(1) >= overbought)).astype(int)
+        new_cols['uosc_buy_signal'] = ((signal_df['uosc'] > oversold) & 
+                                     (signal_df['uosc'].shift(1) <= oversold)).astype(int)
+        
+        new_cols['uosc_sell_signal'] = ((signal_df['uosc'] < overbought) & 
+                                      (signal_df['uosc'].shift(1) >= overbought)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3742,11 +3845,16 @@ class TechnicalIndicators:
             signal_type = "Bearish Divergence"
             signal_strength = 3
         
+        # Get last UOSC value safely
+        uosc_value = self.df['uosc'].iloc[-1]
+        if pd.isna(uosc_value):
+            uosc_value = 50  # Default value if NaN
+        
         self.indicators['ultimate_oscillator'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'uosc': round(self.df['uosc'].iloc[-1], 2),
+                'uosc': round(uosc_value, 2),
                 'oversold_threshold': oversold,
                 'overbought_threshold': overbought,
                 'is_oversold': self.df['uosc_oversold'].iloc[-1],
@@ -3771,37 +3879,65 @@ class TechnicalIndicators:
             self.indicators['cmf'] = {'signal': 0, 'error': 'No volume data available'}
             return
         
-        # Get parameters
-        period = self.params.get_indicator_param('cmf')['period']
-        signal_threshold = self.params.get_indicator_param('cmf')['signal_threshold']
+        # Get parameters with error handling
+        try:
+            cmf_params = self.params.get_indicator_param('cmf')
+            period = cmf_params.get('period', 20)
+            signal_threshold = cmf_params.get('signal_threshold', 0.1)
+        except:
+            period = 20
+            signal_threshold = 0.1
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate Money Flow Multiplier (MFM)
         # MFM = ((close - low) - (high - close)) / (high - low)
-        range = self.df['high'] - self.df['low']
-        self.df['mfm'] = np.where(
-            range != 0,
-            ((self.df['close'] - self.df['low']) - (self.df['high'] - self.df['close'])) / range,
-            0
-        )
+        high_minus_low = self.df['high'] - self.df['low']
+        
+        # Avoid division by zero - use NumPy for vectorized operation
+        high_minus_low_non_zero = np.where(high_minus_low == 0, 0.0001, high_minus_low)
+        
+        numerator = (self.df['close'] - self.df['low']) - (self.df['high'] - self.df['close'])
+        new_cols['mfm'] = numerator / high_minus_low_non_zero
         
         # Calculate Money Flow Volume (MFV)
-        self.df['mfv'] = self.df['mfm'] * self.df['volume']
+        new_cols['mfv'] = new_cols['mfm'] * self.df['volume']
         
         # Calculate Chaikin Money Flow
         # CMF = Sum(MFV) over period / Sum(Volume) over period
-        self.df['cmf'] = (self.df['mfv'].rolling(window=period).sum() / 
-                         self.df['volume'].rolling(window=period).sum())
+        sum_mfv = new_cols['mfv'].rolling(window=period).sum()
+        sum_volume = self.df['volume'].rolling(window=period).sum()
         
-        # Generate signals based on CMF crossing zero
-        self.df['cmf_signal'] = 0
-        self.df.loc[self.df['cmf'] > signal_threshold, 'cmf_signal'] = 1
-        self.df.loc[self.df['cmf'] < -signal_threshold, 'cmf_signal'] = -1
+        # Avoid division by zero
+        sum_volume_non_zero = np.where(sum_volume == 0, 0.0001, sum_volume)
+        new_cols['cmf'] = sum_mfv / sum_volume_non_zero
+        
+        # Create temporary dataframe for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['cmf'] = new_cols['cmf']
+        
+        # Generate signals based on CMF crossing thresholds
+        new_cols['cmf_signal'] = np.zeros(len(self.df))
+        above_mask = temp_df['cmf'] > signal_threshold
+        below_mask = temp_df['cmf'] < -signal_threshold
+        
+        new_cols['cmf_signal'][above_mask] = 1
+        new_cols['cmf_signal'][below_mask] = -1
+        
+        # Convert to Series for crossover calculations
+        cmf_signal_series = pd.Series(new_cols['cmf_signal'], index=self.df.index)
         
         # Detect crossovers
-        self.df['cmf_buy_signal'] = ((self.df['cmf'] > signal_threshold) & 
-                                   (self.df['cmf'].shift(1) <= signal_threshold)).astype(int)
-        self.df['cmf_sell_signal'] = ((self.df['cmf'] < -signal_threshold) & 
-                                    (self.df['cmf'].shift(1) >= -signal_threshold)).astype(int)
+        new_cols['cmf_buy_signal'] = ((temp_df['cmf'] > signal_threshold) & 
+                                    (temp_df['cmf'].shift(1) <= signal_threshold)).astype(int)
+        
+        new_cols['cmf_sell_signal'] = ((temp_df['cmf'] < -signal_threshold) & 
+                                     (temp_df['cmf'].shift(1) >= -signal_threshold)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3820,14 +3956,17 @@ class TechnicalIndicators:
         
         # Check current CMF value
         cmf_value = self.df['cmf'].iloc[-1]
-        if cmf_value > 0.2:
-            current_signal = 1
-            signal_type = "Strong Positive Flow"
-            signal_strength = 3
-        elif cmf_value < -0.2:
-            current_signal = -1
-            signal_type = "Strong Negative Flow"
-            signal_strength = 3
+        if not pd.isna(cmf_value):
+            if cmf_value > 0.2:
+                current_signal = 1
+                signal_type = "Strong Positive Flow"
+                signal_strength = 3
+            elif cmf_value < -0.2:
+                current_signal = -1
+                signal_type = "Strong Negative Flow"
+                signal_strength = 3
+        else:
+            cmf_value = 0  # Default if NaN
         
         self.indicators['cmf'] = {
             'signal': current_signal,
@@ -3850,66 +3989,93 @@ class TechnicalIndicators:
     
     def calculate_alligator(self):
         """Calculate Williams Alligator indicator"""
-        # Get parameters
-        jaw_period = self.params.get_indicator_param('alligator_jaw')
-        jaw_offset = self.params.get_indicator_param('alligator_jaw_offset')
-        teeth_period = self.params.get_indicator_param('alligator_teeth')
-        teeth_offset = self.params.get_indicator_param('alligator_teeth_offset')
-        lips_period = self.params.get_indicator_param('alligator_lips')
-        lips_offset = self.params.get_indicator_param('alligator_lips_offset')
+        # Get parameters with error handling
+        try:
+            jaw_period = self.params.get_indicator_param('alligator_jaw')
+            jaw_offset = self.params.get_indicator_param('alligator_jaw_offset')
+            teeth_period = self.params.get_indicator_param('alligator_teeth')
+            teeth_offset = self.params.get_indicator_param('alligator_teeth_offset')
+            lips_period = self.params.get_indicator_param('alligator_lips')
+            lips_offset = self.params.get_indicator_param('alligator_lips_offset')
+        except:
+            # Default values
+            jaw_period = 13
+            jaw_offset = 8
+            teeth_period = 8
+            teeth_offset = 5
+            lips_period = 5
+            lips_offset = 3
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate median price
-        self.df['median_price'] = (self.df['high'] + self.df['low']) / 2
+        new_cols['median_price'] = (self.df['high'] + self.df['low']) / 2
         
         # Calculate jaw (blue line)
-        self.df['jaw'] = self.df['median_price'].rolling(window=jaw_period).mean().shift(jaw_offset)
+        new_cols['jaw'] = new_cols['median_price'].rolling(window=jaw_period).mean().shift(jaw_offset)
         
         # Calculate teeth (red line)
-        self.df['teeth'] = self.df['median_price'].rolling(window=teeth_period).mean().shift(teeth_offset)
+        new_cols['teeth'] = new_cols['median_price'].rolling(window=teeth_period).mean().shift(teeth_offset)
         
         # Calculate lips (green line)
-        self.df['lips'] = self.df['median_price'].rolling(window=lips_period).mean().shift(lips_offset)
+        new_cols['lips'] = new_cols['median_price'].rolling(window=lips_period).mean().shift(lips_offset)
+        
+        # Create temporary dataframe for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['jaw'] = new_cols['jaw']
+        temp_df['teeth'] = new_cols['teeth']
+        temp_df['lips'] = new_cols['lips']
+        temp_df['close'] = self.df['close']
         
         # Generate signals
-        
         # Alligator sleeping: lines are intertwined (jaw, teeth, and lips are close together)
-        self.df['alligator_sleeping'] = (
-            (abs(self.df['jaw'] - self.df['teeth']) < 0.03 * self.df['close']) & 
-            (abs(self.df['teeth'] - self.df['lips']) < 0.03 * self.df['close'])
-        )
+        # Handle NaN values for jaw, teeth, lips
+        jaw_teeth_diff = abs(temp_df['jaw'] - temp_df['teeth'])
+        teeth_lips_diff = abs(temp_df['teeth'] - temp_df['lips'])
+        
+        # Create masks with NaN protection
+        jaw_teeth_close = jaw_teeth_diff < 0.03 * temp_df['close']
+        teeth_lips_close = teeth_lips_diff < 0.03 * temp_df['close']
+        
+        # Combine masks with NaN protection
+        new_cols['alligator_sleeping'] = jaw_teeth_close & teeth_lips_close
         
         # Alligator awakening: lips cross above teeth and then teeth cross above jaw
-        lips_cross_above_teeth = ((self.df['lips'] > self.df['teeth']) & 
-                                (self.df['lips'].shift(1) <= self.df['teeth'].shift(1)))
-        teeth_cross_above_jaw = ((self.df['teeth'] > self.df['jaw']) & 
-                               (self.df['teeth'].shift(1) <= self.df['jaw'].shift(1)))
+        lips_above_teeth = temp_df['lips'] > temp_df['teeth']
+        lips_above_teeth_prev = temp_df['lips'].shift(1) <= temp_df['teeth'].shift(1)
+        lips_cross_above_teeth = lips_above_teeth & lips_above_teeth_prev
         
-        self.df['alligator_awakening_bullish'] = lips_cross_above_teeth & teeth_cross_above_jaw
+        teeth_above_jaw = temp_df['teeth'] > temp_df['jaw']
+        teeth_above_jaw_prev = temp_df['teeth'].shift(1) <= temp_df['jaw'].shift(1)
+        teeth_cross_above_jaw = teeth_above_jaw & teeth_above_jaw_prev
+        
+        new_cols['alligator_awakening_bullish'] = lips_cross_above_teeth & teeth_cross_above_jaw
         
         # Alligator eating: lines are properly aligned (lips > teeth > jaw)
-        self.df['alligator_eating_bullish'] = (
-            (self.df['lips'] > self.df['teeth']) & 
-            (self.df['teeth'] > self.df['jaw'])
-        )
+        new_cols['alligator_eating_bullish'] = (temp_df['lips'] > temp_df['teeth']) & (temp_df['teeth'] > temp_df['jaw'])
         
         # Alligator going to sleep: lines start to intertwine after being aligned
-        self.df['alligator_sated'] = (
-            ~self.df['alligator_eating_bullish'] & 
-            self.df['alligator_eating_bullish'].shift(1)
-        )
+        eating_bullish = new_cols['alligator_eating_bullish']
+        eating_bullish_prev = eating_bullish.shift(1)
+        new_cols['alligator_sated'] = ~eating_bullish & eating_bullish_prev
         
         # Bearish equivalents
-        lips_cross_below_teeth = ((self.df['lips'] < self.df['teeth']) & 
-                                (self.df['lips'].shift(1) >= self.df['teeth'].shift(1)))
-        teeth_cross_below_jaw = ((self.df['teeth'] < self.df['jaw']) & 
-                               (self.df['teeth'].shift(1) >= self.df['jaw'].shift(1)))
+        lips_below_teeth = temp_df['lips'] < temp_df['teeth']
+        lips_below_teeth_prev = temp_df['lips'].shift(1) >= temp_df['teeth'].shift(1)
+        lips_cross_below_teeth = lips_below_teeth & lips_below_teeth_prev
         
-        self.df['alligator_awakening_bearish'] = lips_cross_below_teeth & teeth_cross_below_jaw
+        teeth_below_jaw = temp_df['teeth'] < temp_df['jaw']
+        teeth_below_jaw_prev = temp_df['teeth'].shift(1) >= temp_df['jaw'].shift(1)
+        teeth_cross_below_jaw = teeth_below_jaw & teeth_below_jaw_prev
         
-        self.df['alligator_eating_bearish'] = (
-            (self.df['lips'] < self.df['teeth']) & 
-            (self.df['teeth'] < self.df['jaw'])
-        )
+        new_cols['alligator_awakening_bearish'] = lips_cross_below_teeth & teeth_cross_below_jaw
+        
+        new_cols['alligator_eating_bearish'] = (temp_df['lips'] < temp_df['teeth']) & (temp_df['teeth'] < temp_df['jaw'])
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3939,17 +4105,22 @@ class TechnicalIndicators:
         elif self.df['alligator_sleeping'].iloc[-1]:
             signal_type = "Alligator Sleeping (No Trend)"
         
+        # Handle NaN values for indicator output
+        jaw_value = self.df['jaw'].iloc[-1]
+        teeth_value = self.df['teeth'].iloc[-1]
+        lips_value = self.df['lips'].iloc[-1]
+        
         self.indicators['alligator'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'jaw': round(self.df['jaw'].iloc[-1], 2) if not pd.isna(self.df['jaw'].iloc[-1]) else None,
-                'teeth': round(self.df['teeth'].iloc[-1], 2) if not pd.isna(self.df['teeth'].iloc[-1]) else None,
-                'lips': round(self.df['lips'].iloc[-1], 2) if not pd.isna(self.df['lips'].iloc[-1]) else None,
+                'jaw': round(jaw_value, 2) if not pd.isna(jaw_value) else None,
+                'teeth': round(teeth_value, 2) if not pd.isna(teeth_value) else None,
+                'lips': round(lips_value, 2) if not pd.isna(lips_value) else None,
                 'state': signal_type,
-                'is_sleeping': self.df['alligator_sleeping'].iloc[-1],
-                'is_eating_bullish': self.df['alligator_eating_bullish'].iloc[-1],
-                'is_eating_bearish': self.df['alligator_eating_bearish'].iloc[-1]
+                'is_sleeping': bool(self.df['alligator_sleeping'].iloc[-1]) if not pd.isna(self.df['alligator_sleeping'].iloc[-1]) else False,
+                'is_eating_bullish': bool(self.df['alligator_eating_bullish'].iloc[-1]) if not pd.isna(self.df['alligator_eating_bullish'].iloc[-1]) else False,
+                'is_eating_bearish': bool(self.df['alligator_eating_bearish'].iloc[-1]) if not pd.isna(self.df['alligator_eating_bearish'].iloc[-1]) else False
             }
         }
         
@@ -3964,45 +4135,68 @@ class TechnicalIndicators:
     
     def calculate_cpr(self):
         """Calculate Central Pivot Range (CPR)"""
-        # Get parameters
-        use_previous_day = self.params.get_indicator_param('cpr_use_previous_day')
+        # Get parameters with error handling
+        try:
+            use_previous_day = self.params.get_indicator_param('cpr_use_previous_day')
+        except:
+            use_previous_day = True  # Default value
         
-        # Initialize CPR columns
-        self.df['pivot'] = np.nan
-        self.df['bc'] = np.nan  # Bottom Central Pivot
-        self.df['tc'] = np.nan  # Top Central Pivot
+        # Initialize new columns dictionary
+        new_cols = {}
+        
+        # Initialize arrays for pivot points
+        pivot_values = np.full(len(self.df), np.nan)
+        bc_values = np.full(len(self.df), np.nan)
+        tc_values = np.full(len(self.df), np.nan)
         
         # Calculate pivot points for each day (or period)
         # If index is datetime, use date grouping
         if pd.api.types.is_datetime64_any_dtype(self.df.index):
             # Group by date
-            date_groups = self.df.groupby(self.df.index.date)
+            unique_dates = pd.Series(self.df.index.date).unique()
             
-            for date, group in date_groups:
+            for date in unique_dates:
+                # Create a boolean mask for this date
+                date_mask = [d.date() == date for d in self.df.index]
+                date_indices = np.where(date_mask)[0]
+                
+                if len(date_indices) == 0:
+                    continue
+                    
+                # Extract data for this day
+                day_data = self.df.iloc[date_indices]
+                
                 # Calculate pivot points for this day
-                high = group['high'].max()
-                low = group['low'].min()
-                close = group['close'].iloc[-1]
+                high = day_data['high'].max()
+                low = day_data['low'].min()
+                close = day_data['close'].iloc[-1]
                 
                 # Central Pivot Range calculation
                 pivot = (high + low + close) / 3
                 bc = (high + low) / 2
                 tc = (pivot - bc) + pivot
                 
-                # Get next day's index if available
-                next_day_index = self.df.index[self.df.index.date > date]
-                
-                if use_previous_day and len(next_day_index) > 0:
-                    # Assign to next day's rows
-                    self.df.loc[next_day_index, 'pivot'] = pivot
-                    self.df.loc[next_day_index, 'bc'] = bc
-                    self.df.loc[next_day_index, 'tc'] = tc
+                if use_previous_day:
+                    # Find next day's indices
+                    next_day_indices = []
+                    for future_date in unique_dates:
+                        if future_date > date:
+                            future_mask = [d.date() == future_date for d in self.df.index]
+                            next_day_indices.extend(np.where(future_mask)[0])
+                            break
+                    
+                    # Assign to next day's rows if available
+                    if next_day_indices:
+                        for idx in next_day_indices:
+                            pivot_values[idx] = pivot
+                            bc_values[idx] = bc
+                            tc_values[idx] = tc
                 else:
                     # Assign to current day's rows
-                    day_index = self.df.index[self.df.index.date == date]
-                    self.df.loc[day_index, 'pivot'] = pivot
-                    self.df.loc[day_index, 'bc'] = bc
-                    self.df.loc[day_index, 'tc'] = tc
+                    for idx in date_indices:
+                        pivot_values[idx] = pivot
+                        bc_values[idx] = bc
+                        tc_values[idx] = tc
         else:
             # If not datetime index, use a rolling window approach
             window_size = 20  # Default window size
@@ -4020,26 +4214,45 @@ class TechnicalIndicators:
                 tc = (pivot - bc) + pivot
                 
                 # Assign to current row
-                self.df.loc[self.df.index[i], 'pivot'] = pivot
-                self.df.loc[self.df.index[i], 'bc'] = bc
-                self.df.loc[self.df.index[i], 'tc'] = tc
+                pivot_values[i] = pivot
+                bc_values[i] = bc
+                tc_values[i] = tc
         
-        # Generate signals
+        # Add calculated pivot values to new columns dictionary
+        new_cols['pivot'] = pd.Series(pivot_values, index=self.df.index)
+        new_cols['bc'] = pd.Series(bc_values, index=self.df.index)
+        new_cols['tc'] = pd.Series(tc_values, index=self.df.index)
         
-        # Calculate width of CPR
-        self.df['cpr_width'] = (self.df['tc'] - self.df['bc']) / self.df['pivot'] * 100
+        # Create temporary dataframe for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['pivot'] = new_cols['pivot']
+        temp_df['bc'] = new_cols['bc']
+        temp_df['tc'] = new_cols['tc']
+        temp_df['close'] = self.df['close']
         
-        # Narrow CPR indicates potential breakout
-        self.df['narrow_cpr'] = self.df['cpr_width'] < (self.df['cpr_width'].rolling(window=20).mean() * 0.7)
+        # Calculate width of CPR with division by zero protection
+        pivot_non_zero = np.where(temp_df['pivot'] == 0, 0.0001, temp_df['pivot'])
+        cpr_width = (temp_df['tc'] - temp_df['bc']) / pivot_non_zero * 100
+        new_cols['cpr_width'] = pd.Series(cpr_width, index=self.df.index)
         
-        # Wide CPR indicates potential volatility
-        self.df['wide_cpr'] = self.df['cpr_width'] > (self.df['cpr_width'].rolling(window=20).mean() * 1.3)
+        # Narrow CPR indicates potential breakout - with NaN handling
+        cpr_width_ma = new_cols['cpr_width'].rolling(window=20).mean()
+        cpr_width_ma_non_zero = np.where(cpr_width_ma == 0, 0.0001, cpr_width_ma)
+        
+        # Calculate narrow and wide CPR indicators
+        new_cols['narrow_cpr'] = new_cols['cpr_width'] < (cpr_width_ma * 0.7)
+        new_cols['wide_cpr'] = new_cols['cpr_width'] > (cpr_width_ma * 1.3)
         
         # Price breaking above/below CPR
-        self.df['break_above_cpr'] = ((self.df['close'] > self.df['tc']) & 
-                                     (self.df['close'].shift(1) <= self.df['tc'])).astype(int)
-        self.df['break_below_cpr'] = ((self.df['close'] < self.df['bc']) & 
-                                     (self.df['close'].shift(1) >= self.df['bc'])).astype(int)
+        new_cols['break_above_cpr'] = ((temp_df['close'] > temp_df['tc']) & 
+                                     (temp_df['close'].shift(1) <= temp_df['tc'])).astype(int)
+        
+        new_cols['break_below_cpr'] = ((temp_df['close'] < temp_df['bc']) & 
+                                     (temp_df['close'].shift(1) >= temp_df['bc'])).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -4071,20 +4284,27 @@ class TechnicalIndicators:
                     signal_type = "Price Within CPR"
         
         # Check for narrow CPR (potential for breakout)
-        if self.df['narrow_cpr'].iloc[-1]:
+        if not pd.isna(self.df['narrow_cpr'].iloc[-1]) and self.df['narrow_cpr'].iloc[-1]:
             signal_type += " (Narrow CPR)"
             signal_strength += 1
         
+        # Get the final CPR values safely
+        pivot_value = self.df['pivot'].iloc[-1]
+        bc_value = self.df['bc'].iloc[-1]
+        tc_value = self.df['tc'].iloc[-1]
+        cpr_width_value = self.df['cpr_width'].iloc[-1]
+        
+        # Generate indicator result with NaN handling
         self.indicators['cpr'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'pivot': round(self.df['pivot'].iloc[-1], 2) if not pd.isna(self.df['pivot'].iloc[-1]) else None,
-                'bc': round(self.df['bc'].iloc[-1], 2) if not pd.isna(self.df['bc'].iloc[-1]) else None,
-                'tc': round(self.df['tc'].iloc[-1], 2) if not pd.isna(self.df['tc'].iloc[-1]) else None,
-                'width': round(self.df['cpr_width'].iloc[-1], 2) if not pd.isna(self.df['cpr_width'].iloc[-1]) else None,
-                'is_narrow': self.df['narrow_cpr'].iloc[-1] if not pd.isna(self.df['narrow_cpr'].iloc[-1]) else False,
-                'is_wide': self.df['wide_cpr'].iloc[-1] if not pd.isna(self.df['wide_cpr'].iloc[-1]) else False,
+                'pivot': round(pivot_value, 2) if not pd.isna(pivot_value) else None,
+                'bc': round(bc_value, 2) if not pd.isna(bc_value) else None,
+                'tc': round(tc_value, 2) if not pd.isna(tc_value) else None,
+                'width': round(cpr_width_value, 2) if not pd.isna(cpr_width_value) else None,
+                'is_narrow': bool(self.df['narrow_cpr'].iloc[-1]) if not pd.isna(self.df['narrow_cpr'].iloc[-1]) else False,
+                'is_wide': bool(self.df['wide_cpr'].iloc[-1]) if not pd.isna(self.df['wide_cpr'].iloc[-1]) else False,
                 'signal_type': signal_type
             }
         }
@@ -4105,11 +4325,15 @@ class TechnicalIndicators:
             self.indicators['volume_profile'] = {'signal': 0, 'error': 'No volume data available'}
             return
         
-        # Get parameters
-        period = self.params.get_indicator_param('volume_profile')['period']
+        # Get parameters with error handling
+        try:
+            period_param = self.params.get_indicator_param('volume_profile')
+            period = period_param.get('period', 20)
+        except:
+            period = 20  # Default if parameter not found
         
-        # Get recent subset of data
-        recent_data = self.df.iloc[-period:]
+        # Get recent subset of data - create a copy to avoid modifying the original
+        recent_data = self.df.iloc[-period:].copy()
         
         # Create price bins
         price_range = recent_data['high'].max() - recent_data['low'].min()
@@ -4123,41 +4347,65 @@ class TechnicalIndicators:
         
         # Assign each candle to a price bin
         # Using typical price (high + low + close) / 3
-        recent_data['typical_price'] = (recent_data['high'] + recent_data['low'] + recent_data['close']) / 3
-        recent_data['price_bin'] = pd.cut(recent_data['typical_price'], bins=price_bins, labels=False)
+        typical_price = (recent_data['high'] + recent_data['low'] + recent_data['close']) / 3
+        
+        # Avoid modifying the original DataFrame
+        price_bin_data = pd.cut(typical_price, bins=price_bins, labels=False)
         
         # Calculate volume per price bin
-        volume_profile = recent_data.groupby('price_bin')['volume'].sum()
+        volume_profile = pd.Series(index=price_bin_data.unique())
+        for bin_idx in price_bin_data.unique():
+            if pd.isna(bin_idx):
+                continue
+            bin_mask = price_bin_data == bin_idx
+            volume_profile[bin_idx] = recent_data.loc[bin_mask, 'volume'].sum()
         
         # Find Point of Control (POC) - price level with highest volume
-        poc_bin = volume_profile.idxmax()
-        poc_price = (price_bins[poc_bin] + price_bins[poc_bin + 1]) / 2
+        if len(volume_profile) > 0:
+            poc_bin = volume_profile.idxmax()
+            
+            # Handle the case where poc_bin might be NaN
+            if pd.isna(poc_bin):
+                # Use a sensible default - median price bin
+                poc_bin = len(price_bins) // 2 - 1 if len(price_bins) > 1 else 0
+                
+            poc_price = (price_bins[int(poc_bin)] + price_bins[int(poc_bin) + 1]) / 2
+            
+            # Define Value Area (70% of total volume)
+            total_volume = volume_profile.sum()
+            value_area_volume = total_volume * 0.7
+            
+            # Sort bins by volume (descending)
+            sorted_bins = volume_profile.sort_values(ascending=False)
+            
+            # Take bins until we reach 70% of total volume
+            cumulative_volume = 0
+            value_area_bins = []
+            
+            for bin_idx, bin_volume in sorted_bins.items():
+                cumulative_volume += bin_volume
+                value_area_bins.append(bin_idx)
+                if cumulative_volume >= value_area_volume:
+                    break
+            
+            # Define Value Area High (VAH) and Value Area Low (VAL)
+            if value_area_bins:
+                vah_bin = max(value_area_bins)
+                val_bin = min(value_area_bins)
+                
+                vah_price = (price_bins[int(vah_bin)] + price_bins[int(vah_bin) + 1]) / 2
+                val_price = (price_bins[int(val_bin)] + price_bins[int(val_bin) + 1]) / 2
+            else:
+                # Default values if we couldn't calculate
+                vah_price = price_bins[-1]
+                val_price = price_bins[0]
+        else:
+            # Handle empty volume profile
+            poc_price = (price_bins[0] + price_bins[-1]) / 2
+            vah_price = price_bins[-1]
+            val_price = price_bins[0]
         
-        # Define Value Area (70% of total volume)
-        total_volume = volume_profile.sum()
-        value_area_volume = total_volume * 0.7
-        
-        # Sort bins by volume (descending)
-        sorted_bins = volume_profile.sort_values(ascending=False)
-        
-        # Take bins until we reach 70% of total volume
-        cumulative_volume = 0
-        value_area_bins = []
-        
-        for bin_idx, bin_volume in sorted_bins.items():
-            cumulative_volume += bin_volume
-            value_area_bins.append(bin_idx)
-            if cumulative_volume >= value_area_volume:
-                break
-        
-        # Define Value Area High (VAH) and Value Area Low (VAL)
-        vah_bin = max(value_area_bins)
-        val_bin = min(value_area_bins)
-        
-        vah_price = (price_bins[vah_bin] + price_bins[vah_bin + 1]) / 2
-        val_price = (price_bins[val_bin] + price_bins[val_bin + 1]) / 2
-        
-        # Generate signals
+        # Get current price
         current_price = self.df['close'].iloc[-1]
         
         # Generate signal
@@ -4182,9 +4430,7 @@ class TechnicalIndicators:
             signal_type = "Price at Point of Control"
             # This is usually neutral
         
-        # If price and POC are close, no strong signal
-        # But if we have a strong trend (use ADX or similar), can use POC as support/resistance
-        
+        # Save results to indicators
         self.indicators['volume_profile'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
@@ -4208,36 +4454,41 @@ class TechnicalIndicators:
     
     def calculate_support_resistance(self):
         """Calculate support and resistance levels"""
-        # Get parameters
-        period = self.params.get_indicator_param('support_resistance')['pivot_period']
-        pivot_threshold = self.params.get_indicator_param('support_resistance')['pivot_threshold']
+        # Get parameters with error handling
+        try:
+            sr_params = self.params.get_indicator_param('support_resistance')
+            period = sr_params.get('pivot_period', 5)
+            pivot_threshold = sr_params.get('pivot_threshold', 0.03)
+        except:
+            period = 5
+            pivot_threshold = 0.03
         
         # Find pivot highs and lows
-        # A pivot high is a high that is higher than surrounding highs within window
-        # A pivot low is a low that is lower than surrounding lows within window
-        
-        # Initialize arrays for pivot highs and lows
         pivots_high = []
         pivots_low = []
         
-        # Find pivot highs
+        # Use array operations instead of DataFrame indexing for better performance
+        high_values = self.df['high'].values
+        low_values = self.df['low'].values
+        
+        # Find pivot highs using arrays - a high point with lower values on both sides
         for i in range(period, len(self.df) - period):
-            window_left = self.df['high'].iloc[i - period:i]
-            window_right = self.df['high'].iloc[i + 1:i + period + 1]
+            window_left = high_values[i - period:i]
+            window_right = high_values[i + 1:i + period + 1]
             
-            current_high = self.df['high'].iloc[i]
+            current_high = high_values[i]
             
-            if (current_high > window_left.max()) and (current_high > window_right.max()):
+            if (current_high > np.max(window_left)) and (current_high > np.max(window_right)):
                 pivots_high.append((self.df.index[i], current_high))
         
-        # Find pivot lows
+        # Find pivot lows using arrays - a low point with higher values on both sides
         for i in range(period, len(self.df) - period):
-            window_left = self.df['low'].iloc[i - period:i]
-            window_right = self.df['low'].iloc[i + 1:i + period + 1]
+            window_left = low_values[i - period:i]
+            window_right = low_values[i + 1:i + period + 1]
             
-            current_low = self.df['low'].iloc[i]
+            current_low = low_values[i]
             
-            if (current_low < window_left.min()) and (current_low < window_right.min()):
+            if (current_low < np.min(window_left)) and (current_low < np.min(window_right)):
                 pivots_low.append((self.df.index[i], current_low))
         
         # Group pivot points that are close to each other (clustering)
@@ -4245,10 +4496,14 @@ class TechnicalIndicators:
             if not levels:
                 return []
             
+            # Sort levels by price first
+            levels = sorted(levels, key=lambda x: x[1])
+            
             clustered = []
             current_cluster = [levels[0]]
             
             for i in range(1, len(levels)):
+                # Check if this level is within threshold percentage of the first level in cluster
                 if abs(levels[i][1] - current_cluster[0][1]) / current_cluster[0][1] <= threshold:
                     current_cluster.append(levels[i])
                 else:
@@ -4319,7 +4574,11 @@ class TechnicalIndicators:
             signal_strength = 2
         
         # Adjust signal if we also have trend information
-        if 'uptrend' in self.df.columns and 'downtrend' in self.df.columns:
+        # Create a temporary copy to check for columns
+        uptrend_exists = 'uptrend' in self.df.columns
+        downtrend_exists = 'downtrend' in self.df.columns
+        
+        if uptrend_exists and downtrend_exists:
             # Strong buy signal: Uptrend and at support
             if current_signal == 1 and self.df['uptrend'].iloc[-1] == 1:
                 signal_type += " in Uptrend"
@@ -4360,15 +4619,19 @@ class TechnicalIndicators:
     
     def calculate_fibonacci_retracement(self):
         """Calculate Fibonacci retracement levels"""
-        # Get parameters
-        lookback = self.params.get_indicator_param('fibonacci_retracement')['lookback']
+        # Get parameters with error handling
+        try:
+            fib_params = self.params.get_indicator_param('fibonacci_retracement')
+            lookback = fib_params.get('lookback', 100)
+        except:
+            lookback = 100  # Default value
         
-        # Identify significant swing high and low
-        # Use a subset of recent data
+        # Ensure lookback doesn't exceed available data
         if len(self.df) < lookback:
             lookback = len(self.df)
             
-        recent_data = self.df.iloc[-lookback:]
+        # Get recent data - don't modify the original DataFrame
+        recent_data = self.df.iloc[-lookback:].copy()
         
         # Find the highest high and lowest low
         swing_high = recent_data['high'].max()
@@ -4380,44 +4643,44 @@ class TechnicalIndicators:
         trend = 'uptrend' if high_idx > low_idx else 'downtrend'
         
         # Calculate Fibonacci levels
+        range_size = swing_high - swing_low
+        
+        # Create dictionary to hold Fibonacci levels
+        fib_levels_dict = {}
+        
         if trend == 'uptrend':
             # Uptrend: retracements from low to high
-            range_size = swing_high - swing_low
-            fib_0 = swing_low
-            fib_236 = swing_low + 0.236 * range_size
-            fib_382 = swing_low + 0.382 * range_size
-            fib_50 = swing_low + 0.5 * range_size
-            fib_618 = swing_low + 0.618 * range_size
-            fib_786 = swing_low + 0.786 * range_size
-            fib_100 = swing_high
+            fib_levels_dict = {
+                0: swing_low,
+                0.236: swing_low + 0.236 * range_size,
+                0.382: swing_low + 0.382 * range_size,
+                0.5: swing_low + 0.5 * range_size,
+                0.618: swing_low + 0.618 * range_size,
+                0.786: swing_low + 0.786 * range_size,
+                1: swing_high
+            }
         else:
             # Downtrend: retracements from high to low
-            range_size = swing_high - swing_low
-            fib_0 = swing_high
-            fib_236 = swing_high - 0.236 * range_size
-            fib_382 = swing_high - 0.382 * range_size
-            fib_50 = swing_high - 0.5 * range_size
-            fib_618 = swing_high - 0.618 * range_size
-            fib_786 = swing_high - 0.786 * range_size
-            fib_100 = swing_low
+            fib_levels_dict = {
+                0: swing_high,
+                0.236: swing_high - 0.236 * range_size,
+                0.382: swing_high - 0.382 * range_size,
+                0.5: swing_high - 0.5 * range_size,
+                0.618: swing_high - 0.618 * range_size,
+                0.786: swing_high - 0.786 * range_size,
+                1: swing_low
+            }
         
         # Get current price
         current_price = self.df['close'].iloc[-1]
         
-        # Check which level the price is closest to
-        fib_levels = [
-            (0, fib_0),
-            (0.236, fib_236),
-            (0.382, fib_382),
-            (0.5, fib_50),
-            (0.618, fib_618),
-            (0.786, fib_786),
-            (1, fib_100)
-        ]
+        # Convert to list of tuples for finding closest level
+        fib_levels = [(level, price) for level, price in fib_levels_dict.items()]
         
+        # Find closest Fibonacci level to current price
         closest_level = min(fib_levels, key=lambda x: abs(x[1] - current_price))
         
-        # Check if price is very near a Fibonacci level
+        # Check if price is very near a Fibonacci level (within 0.3%)
         price_at_fib = abs(closest_level[1] - current_price) / current_price < 0.003
         
         # Generate signals
@@ -4458,23 +4721,26 @@ class TechnicalIndicators:
                     signal_strength = 1
                     signal_type = f"Shallow {fib_value} Retracement in Downtrend"
         
+        # Format the Fibonacci levels for the output
+        formatted_values = {
+            'trend': trend,
+            'fib_0': round(fib_levels_dict[0], 2),
+            'fib_236': round(fib_levels_dict[0.236], 2),
+            'fib_382': round(fib_levels_dict[0.382], 2),
+            'fib_50': round(fib_levels_dict[0.5], 2),
+            'fib_618': round(fib_levels_dict[0.618], 2),
+            'fib_786': round(fib_levels_dict[0.786], 2),
+            'fib_100': round(fib_levels_dict[1], 2),
+            'closest_level': closest_level[0],
+            'closest_price': round(closest_level[1], 2),
+            'price_at_fib': price_at_fib,
+            'signal_type': signal_type
+        }
+        
         self.indicators['fibonacci_retracement'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
-            'values': {
-                'trend': trend,
-                'fib_0': round(fib_0, 2),
-                'fib_236': round(fib_236, 2),
-                'fib_382': round(fib_382, 2),
-                'fib_50': round(fib_50, 2),
-                'fib_618': round(fib_618, 2),
-                'fib_786': round(fib_786, 2),
-                'fib_100': round(fib_100, 2),
-                'closest_level': closest_level[0],
-                'closest_price': round(closest_level[1], 2),
-                'price_at_fib': price_at_fib,
-                'signal_type': signal_type
-            }
+            'values': formatted_values
         }
         
         # Add to signals list if signal exists
@@ -4488,19 +4754,37 @@ class TechnicalIndicators:
     
     def calculate_divergence(self):
         """Calculate divergence between price and oscillators"""
-        # Ensure we have the required indicators
+        # Ensure we have the required indicators with error handling
         if 'rsi' not in self.df.columns:
-            self.calculate_rsi()
+            try:
+                self.calculate_rsi()
+            except Exception as e:
+                self.indicators['divergence'] = {'signal': 0, 'error': f'Failed to calculate RSI: {str(e)}'}
+                return
         
         if 'macd_line' not in self.df.columns:
-            self.calculate_macd()
+            try:
+                self.calculate_macd()
+            except Exception as e:
+                self.indicators['divergence'] = {'signal': 0, 'error': f'Failed to calculate MACD: {str(e)}'}
+                return
         
-        # Get parameters
-        lookback = self.params.get_indicator_param('divergence')['lookback']
-        tolerance = self.params.get_indicator_param('divergence')['tolerance']
+        # Get parameters with error handling
+        try:
+            div_params = self.params.get_indicator_param('divergence')
+            lookback = div_params.get('lookback', 50)
+            tolerance = div_params.get('tolerance', 3)
+        except:
+            lookback = 50
+            tolerance = 3
         
-        # Use a subset of recent data
+        # Calculate recent length with bounds checking
         recent = min(lookback, len(self.df) - 1)
+        
+        # Get arrays for price and indicators for better performance
+        high_prices = self.df['high'].values
+        low_prices = self.df['low'].values
+        rsi_values = self.df['rsi'].values
         
         # Find significant price swing points
         price_highs = []
@@ -4508,31 +4792,37 @@ class TechnicalIndicators:
         
         window_size = 5
         for i in range(window_size, len(self.df) - window_size):
+            # Local window for price highs
+            local_window_high = high_prices[i-window_size:i+window_size+1]
+            
             # Check for local price highs
-            if self.df['high'].iloc[i] == max(self.df['high'].iloc[i-window_size:i+window_size+1]):
-                price_highs.append((i, self.df['high'].iloc[i]))
+            if high_prices[i] == np.max(local_window_high):
+                price_highs.append((i, high_prices[i]))
+            
+            # Local window for price lows
+            local_window_low = low_prices[i-window_size:i+window_size+1]
             
             # Check for local price lows
-            if self.df['low'].iloc[i] == min(self.df['low'].iloc[i-window_size:i+window_size+1]):
-                price_lows.append((i, self.df['low'].iloc[i]))
+            if low_prices[i] == np.min(local_window_low):
+                price_lows.append((i, low_prices[i]))
         
         # Find oscillator swing points (using RSI)
         rsi_highs = []
         rsi_lows = []
         
         for i in range(window_size, len(self.df) - window_size):
+            # Local window for RSI
+            local_window_rsi = rsi_values[i-window_size:i+window_size+1]
+            
             # Check for local RSI highs
-            if self.df['rsi'].iloc[i] == max(self.df['rsi'].iloc[i-window_size:i+window_size+1]):
-                rsi_highs.append((i, self.df['rsi'].iloc[i]))
+            if rsi_values[i] == np.max(local_window_rsi):
+                rsi_highs.append((i, rsi_values[i]))
             
             # Check for local RSI lows
-            if self.df['rsi'].iloc[i] == min(self.df['rsi'].iloc[i-window_size:i+window_size+1]):
-                rsi_lows.append((i, self.df['rsi'].iloc[i]))
+            if rsi_values[i] == np.min(local_window_rsi):
+                rsi_lows.append((i, rsi_values[i]))
         
         # Look for divergences
-        # Bearish divergence: Price makes higher high but oscillator makes lower high
-        # Bullish divergence: Price makes lower low but oscillator makes higher low
-        
         bullish_divergence = False
         bearish_divergence = False
         divergence_strength = 0
@@ -4548,7 +4838,7 @@ class TechnicalIndicators:
             prev_rsi_high = rsi_highs[-2]
             
             # Check timing (price and RSI highs should be close in time)
-            if abs(last_price_high[0] - last_rsi_high[0]) <= 3 and abs(prev_price_high[0] - prev_rsi_high[0]) <= 3:
+            if abs(last_price_high[0] - last_rsi_high[0]) <= tolerance and abs(prev_price_high[0] - prev_rsi_high[0]) <= tolerance:
                 # Check for bearish divergence
                 if (last_price_high[1] > prev_price_high[1] and  # Price made higher high
                     last_rsi_high[1] < prev_rsi_high[1]):        # RSI made lower high
@@ -4565,7 +4855,7 @@ class TechnicalIndicators:
             prev_rsi_low = rsi_lows[-2]
             
             # Check timing (price and RSI lows should be close in time)
-            if abs(last_price_low[0] - last_rsi_low[0]) <= 3 and abs(prev_price_low[0] - prev_rsi_low[0]) <= 3:
+            if abs(last_price_low[0] - last_rsi_low[0]) <= tolerance and abs(prev_price_low[0] - prev_rsi_low[0]) <= tolerance:
                 # Check for bullish divergence
                 if (last_price_low[1] < prev_price_low[1] and  # Price made lower low
                     last_rsi_low[1] > prev_rsi_low[1]):        # RSI made higher low
@@ -4583,13 +4873,12 @@ class TechnicalIndicators:
             current_signal = -1
             signal_type = "Bearish Divergence (RSI)"
         
-        # Also check MACD divergence
+        # Also check MACD divergence - simplified implementation
+        # In a real implementation, you would do the same analysis as for RSI
         macd_bullish_divergence = False
         macd_bearish_divergence = False
         
-        # Similar logic for MACD divergence detection
-        # (simplified for brevity)
-        
+        # If MACD divergence is found, it might override the RSI signal
         if macd_bullish_divergence:
             current_signal = 1
             signal_type = "Bullish Divergence (MACD)"
@@ -4625,22 +4914,40 @@ class TechnicalIndicators:
         Analyze VIX-like volatility for market timing
         This is a simplified approach for stocks where VIX isn't directly available
         """
-        # Get parameters
-        smoothing_period = self.params.get_indicator_param('vix_analysis')['smoothing_period']
-        threshold_high = self.params.get_indicator_param('vix_analysis')['threshold_high']
-        threshold_low = self.params.get_indicator_param('vix_analysis')['threshold_low']
+        # Get parameters with error handling
+        try:
+            vix_params = self.params.get_indicator_param('vix_analysis')
+            smoothing_period = vix_params.get('smoothing_period', 14)
+            threshold_high = vix_params.get('threshold_high', 5.0)
+            threshold_low = vix_params.get('threshold_low', 1.0)
+        except:
+            smoothing_period = 14
+            threshold_high = 5.0
+            threshold_low = 1.0
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate ATR as volatility proxy if not already done
         if 'atr' not in self.df.columns:
             self.calculate_atr()
         
-        # Calculate ATR percentage (relative to price)
-        self.df['atr_pct'] = 100 * self.df['atr'] / self.df['close']
+        # Calculate ATR percentage (relative to price) with division by zero protection
+        close_non_zero = np.where(self.df['close'] == 0, 0.0001, self.df['close'])
+        atr_pct = 100 * self.df['atr'] / close_non_zero
+        
+        new_cols['atr_pct'] = pd.Series(atr_pct, index=self.df.index)
         
         # Calculate smoothed ATR percentage
-        self.df['smoothed_atr_pct'] = self.df['atr_pct'].rolling(window=smoothing_period).mean()
+        new_cols['smoothed_atr_pct'] = new_cols['atr_pct'].rolling(window=smoothing_period).mean()
         
-        # Calculate percentile ranks for volatility
+        # Add columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
+        
+        # Calculate percentile ranks for volatility with sufficient data check
+        vol_percentile = 50  # Default value
+        
         lookback = 100
         if len(self.df) >= lookback:
             # Get recent volatility values
@@ -4648,32 +4955,50 @@ class TechnicalIndicators:
             
             # Calculate percentile rank of current volatility
             current_vol = self.df['smoothed_atr_pct'].iloc[-1]
-            higher_vol_count = (recent_vol > current_vol).sum()
-            vol_percentile = 100 * higher_vol_count / len(recent_vol)
-        else:
-            vol_percentile = 50  # Default if not enough data
+            
+            # Handle NaN values
+            if not pd.isna(current_vol):
+                # Count values higher than current
+                higher_vol_count = np.sum(~pd.isna(recent_vol) & (recent_vol > current_vol))
+                # Count non-NaN values for denominator
+                non_nan_count = np.sum(~pd.isna(recent_vol))
+                
+                if non_nan_count > 0:
+                    vol_percentile = 100 * higher_vol_count / non_nan_count
         
         # Generate signal
         current_signal = 0
         signal_strength = 0
         signal_type = ""
         
+        # Safely get current ATR percentage with NaN check
+        current_atr_pct = self.df['atr_pct'].iloc[-1]
+        if pd.isna(current_atr_pct):
+            current_atr_pct = 0
+        
         # High volatility often indicates market bottoms (contrarian buy signal)
         if vol_percentile < 20:  # Bottom 20% of volatility
-            if self.df['atr_pct'].iloc[-1] > threshold_high:
+            if current_atr_pct > threshold_high:
                 current_signal = 1
                 signal_type = "High Volatility (Contrarian Buy)"
                 signal_strength = 2
         
         # Low volatility often precedes market corrections
         elif vol_percentile > 80:  # Top 20% of volatility
-            if self.df['atr_pct'].iloc[-1] < threshold_low:
+            if current_atr_pct < threshold_low:
                 current_signal = -1
                 signal_type = "Low Volatility (Potential Correction)"
                 signal_strength = 2
         
-        # Volatility expansion/contraction
-        vol_change = ((self.df['smoothed_atr_pct'].iloc[-1] / self.df['smoothed_atr_pct'].iloc[-10]) - 1) * 100
+        # Calculate volatility expansion/contraction safely
+        vol_change = 0
+        
+        # Get current and past smoothed ATR values with NaN checks
+        current_smoothed = self.df['smoothed_atr_pct'].iloc[-1]
+        past_smoothed = self.df['smoothed_atr_pct'].iloc[-10] if len(self.df) >= 10 else None
+        
+        if not pd.isna(current_smoothed) and not pd.isna(past_smoothed) and past_smoothed != 0:
+            vol_change = ((current_smoothed / past_smoothed) - 1) * 100
         
         if vol_change > 20:  # Volatility expanded by 20%+
             if current_signal == 0:
@@ -4690,8 +5015,8 @@ class TechnicalIndicators:
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
-                'current_vol': round(self.df['atr_pct'].iloc[-1], 2),
-                'smoothed_vol': round(self.df['smoothed_atr_pct'].iloc[-1], 2),
+                'current_vol': round(current_atr_pct, 2),
+                'smoothed_vol': round(current_smoothed, 2) if not pd.isna(current_smoothed) else None,
                 'vol_percentile': round(vol_percentile, 2),
                 'vol_change_pct': round(vol_change, 2),
                 'signal_type': signal_type
@@ -4718,7 +5043,7 @@ class TechnicalIndicators:
         if not self.indicators:
             self.calculate_all()
         
-        # Return signals
+        # Return signals - no changes needed here as it doesn't modify DataFrame
         return {
             'buy_signals': [s for s in self.signals if s['signal'] == 'BUY'],
             'sell_signals': [s for s in self.signals if s['signal'] == 'SELL'],
@@ -4737,7 +5062,11 @@ class TechnicalIndicators:
             self.calculate_all()
         
         # Get indicator weights from parameters
-        indicator_weights = self.params.get_signal_param('indicator_strength_weights')
+        try:
+            indicator_weights = self.params.get_signal_param('indicator_strength_weights')
+        except:
+            # Default to empty dictionary if parameter not found
+            indicator_weights = {}
         
         # Count buy and sell signals with their weights
         buy_signals = [s for s in self.signals if s['signal'] == 'BUY']
@@ -4759,22 +5088,31 @@ class TechnicalIndicators:
             sell_strength += signal['strength'] * weight
         
         # Determine overall signal based on weighted strengths
+        # Prevent division by zero when calculating confidence
+        total_strength = buy_strength + sell_strength
+        
+        if total_strength == 0:
+            confidence = 50  # Default to neutral confidence if no signals
+        else:
+            # Calculate confidence based on relative strength
+            if buy_strength > sell_strength:
+                confidence = min(100, int(buy_strength * 100 / total_strength))
+            else:
+                confidence = min(100, int(sell_strength * 100 / total_strength))
+        
+        # Determine signal type and strength
         if buy_strength > sell_strength * 1.5:  # Strongly bullish
             signal_type = 'STRONG BUY'
             strength = 5
-            confidence = min(100, int(buy_strength * 100 / (buy_strength + sell_strength)))
         elif buy_strength > sell_strength:  # Moderately bullish
             signal_type = 'BUY'
             strength = 4
-            confidence = min(100, int(buy_strength * 100 / (buy_strength + sell_strength)))
         elif sell_strength > buy_strength * 1.5:  # Strongly bearish
             signal_type = 'STRONG SELL'
             strength = 5
-            confidence = min(100, int(sell_strength * 100 / (buy_strength + sell_strength)))
         elif sell_strength > buy_strength:  # Moderately bearish
             signal_type = 'SELL'
             strength = 4
-            confidence = min(100, int(sell_strength * 100 / (buy_strength + sell_strength)))
         else:  # Neutral
             signal_type = 'NEUTRAL'
             strength = 0
@@ -4841,18 +5179,43 @@ class TechnicalIndicators:
         # Get current price
         current_price = self.df['close'].iloc[-1]
         
-        # Get ATR for stop loss calculation
+        # Get ATR for stop loss calculation with error handling
         if 'atr' not in self.indicators:
-            self.calculate_atr()
+            try:
+                self.calculate_atr()
+            except Exception as e:
+                # Handle case where ATR calculation fails
+                return {
+                    'error': f"Could not calculate ATR: {str(e)}",
+                    'signal': overall['signal'],
+                    'strength': overall['strength'],
+                    'confidence': overall['confidence'],
+                    'current_price': round(current_price, 2),
+                    'summary': overall['summary'],
+                    'timestamp': overall['timestamp']
+                }
         
-        atr_value = self.indicators['atr']['values']['atr']
+        # Safely get ATR value
+        try:
+            atr_value = self.indicators['atr']['values']['atr']
+        except (KeyError, TypeError):
+            atr_value = current_price * 0.02  # Fallback to 2% of price if ATR is not available
         
-        # Get stop loss and target parameters
-        stop_multiplier = self.params.get_signal_param('stop_multiplier')
-        target_multiplier = self.params.get_signal_param('target_multiplier')
+        # Get stop loss and target parameters with error handling
+        try:
+            stop_multiplier = self.params.get_signal_param('stop_multiplier')
+            target_multiplier = self.params.get_signal_param('target_multiplier')
+        except:
+            # Default values if parameters not found
+            stop_multiplier = 2.0
+            target_multiplier = 3.0
+        
+        # Initialize variables
+        stop_loss = None
+        target = None
         
         # Calculate stop loss and target based on signal
-        if overall['signal'] == 'BUY' or overall['signal'] == 'STRONG BUY':
+        if overall['signal'] in ['BUY', 'STRONG BUY']:
             stop_loss = current_price - (atr_value * stop_multiplier)
             target = current_price + (atr_value * target_multiplier)
             
@@ -4871,7 +5234,7 @@ class TechnicalIndicators:
                     if potential_target - current_price > atr_value:  # Not too close
                         target = potential_target
             
-        elif overall['signal'] == 'SELL' or overall['signal'] == 'STRONG SELL':
+        elif overall['signal'] in ['SELL', 'STRONG SELL']:
             stop_loss = current_price + (atr_value * stop_multiplier)
             target = current_price - (atr_value * target_multiplier)
             
@@ -4889,37 +5252,33 @@ class TechnicalIndicators:
                     potential_target = sr['closest_support']
                     if current_price - potential_target > atr_value:  # Not too close
                         target = potential_target
-        else:
-            # Neutral signal
-            stop_loss = None
-            target = None
         
-        # Calculate reward-to-risk ratio
-        if stop_loss and target:
+        # Calculate reward-to-risk ratio with division by zero protection
+        reward_risk_ratio = 0
+        if stop_loss is not None and target is not None:
             risk = abs(current_price - stop_loss)
             reward = abs(target - current_price)
-            reward_risk_ratio = round(reward / risk, 2) if risk > 0 else 0
-        else:
-            reward_risk_ratio = 0
+            if risk > 0:
+                reward_risk_ratio = round(reward / risk, 2)
         
         # Calculate stop loss and target percentages
-        if stop_loss:
+        stop_loss_pct = None
+        target_pct = None
+        
+        if stop_loss is not None and current_price > 0:
             stop_loss_pct = round(abs(stop_loss - current_price) / current_price * 100, 2)
-        else:
-            stop_loss_pct = None
-            
-        if target:
+        
+        if target is not None and current_price > 0:
             target_pct = round(abs(target - current_price) / current_price * 100, 2)
-        else:
-            target_pct = None
         
         # Get support and resistance levels
+        support_levels = []
+        resistance_levels = []
+        
         if 'support_resistance' in self.indicators:
-            support_levels = self.indicators['support_resistance']['values'].get('support_levels', [])
-            resistance_levels = self.indicators['support_resistance']['values'].get('resistance_levels', [])
-        else:
-            support_levels = []
-            resistance_levels = []
+            sr_values = self.indicators['support_resistance']['values']
+            support_levels = sr_values.get('support_levels', [])
+            resistance_levels = sr_values.get('resistance_levels', [])
         
         # Create trade checklist
         checklist = self._create_trade_checklist(overall['signal'])
@@ -4966,7 +5325,7 @@ class TechnicalIndicators:
         # 1. Trend alignment
         trend_aligned = False
         if 'moving_averages' in self.indicators:
-            ma = self.indicators['moving_averages']['values']
+            ma = self.indicators['moving_averages'].get('values', {})
             if is_buy:
                 trend_aligned = ma.get('uptrend', False) or ma.get('price_above_sma_long', False)
             else:
@@ -4975,34 +5334,40 @@ class TechnicalIndicators:
         
         # 2. Volume confirmation
         volume_confirmed = False
-        if 'volume' in self.df.columns and self.df['volume'].sum() > 0:
-            # Check recent volume
+        if 'volume' in self.df.columns and len(self.df) >= 20:
+            # Check recent volume if volume column exists and enough data
             avg_volume = self.df['volume'].iloc[-20:].mean()
-            current_volume = self.df['volume'].iloc[-1]
-            volume_confirmed = current_volume > avg_volume * 1.2
+            if avg_volume > 0 and not pd.isna(avg_volume):  # Avoid division by zero
+                current_volume = self.df['volume'].iloc[-1]
+                volume_confirmed = current_volume > avg_volume * 1.2
         checklist['volume_confirmed'] = volume_confirmed
         
         # 3. Risk-Reward ratio check
         rrr_confirmed = False
-        if 'reward_to_risk' in self.indicators:
-            rrr = self.indicators['reward_to_risk']['values'].get('rrr', 0)
-            min_rrr = self.params.get_signal_param('min_rrr')
-            rrr_confirmed = rrr >= min_rrr
+        try:
+            if 'reward_to_risk' in self.indicators:
+                rrr = self.indicators['reward_to_risk']['values'].get('rrr', 0)
+                min_rrr = self.params.get_signal_param('min_rrr')
+                if min_rrr > 0:  # Ensure min_rrr is valid
+                    rrr_confirmed = rrr >= min_rrr
+        except:
+            pass  # If error, keep rrr_confirmed as False
         checklist['rrr_confirmed'] = rrr_confirmed
         
-        # 4. Multiple timeframe alignment (would need data from multiple timeframes)
-        # For now, use a simplified approach based on trend strength
+        # 4. Multiple timeframe alignment
         timeframe_aligned = False
         if 'adx' in self.indicators:
-            adx_trend_strength = self.indicators['adx']['values'].get('trend_strength', 'Weak')
+            adx_values = self.indicators['adx'].get('values', {})
+            adx_trend_strength = adx_values.get('trend_strength', 'Weak')
             timeframe_aligned = adx_trend_strength == 'Strong'
         checklist['timeframe_aligned'] = timeframe_aligned
         
         # 5. Pattern confirmation
         pattern_confirmed = False
         for signal in self.signals:
-            if signal['indicator'].startswith('Chart Pattern') or signal['indicator'].startswith('Candlestick'):
-                if (is_buy and signal['signal'] == 'BUY') or (not is_buy and signal['signal'] == 'SELL'):
+            indicator = signal.get('indicator', '')
+            if indicator.startswith('Chart Pattern') or indicator.startswith('Candlestick'):
+                if (is_buy and signal.get('signal') == 'BUY') or (not is_buy and signal.get('signal') == 'SELL'):
                     pattern_confirmed = True
                     break
         checklist['pattern_confirmed'] = pattern_confirmed
@@ -5011,9 +5376,9 @@ class TechnicalIndicators:
         sr_confirmed = False
         if 'support_resistance' in self.indicators:
             sr = self.indicators['support_resistance']
-            if is_buy and sr['signal'] == 1:
+            if is_buy and sr.get('signal') == 1:
                 sr_confirmed = True
-            elif not is_buy and sr['signal'] == -1:
+            elif not is_buy and sr.get('signal') == -1:
                 sr_confirmed = True
         checklist['sr_confirmed'] = sr_confirmed
         
@@ -5030,43 +5395,68 @@ class TechnicalIndicators:
         Returns:
             BacktestEngine instance with results
         """
-        # Create a copy of the dataframe for backtesting
+        # Validate inputs
+        if lookback_days <= 0:
+            lookback_days = 250  # Use default if invalid
+        
+        # Limit lookback to available data
+        lookback_days = min(lookback_days, len(self.df))
+        
+        # Create a copy of the dataframe for backtesting - prevents modifying original
         df_backtest = self.df.copy()
         
-        # Initialize backtesting engine
-        backtest = BacktestEngine(df_backtest, self.params)
-        
-        # Default strategy function if none provided
-        if backtesting_func is None:
-            def default_strategy(data):
-                # Initialize indicators
-                indicators = TechnicalIndicators(data, self.params)
-                indicators.calculate_all()
-                
-                # Get overall signal
-                signal = indicators.get_overall_signal()
-                
-                # Convert signal to numeric (-1, 0, 1)
-                if signal['signal'] in ['BUY', 'STRONG BUY']:
-                    return 1
-                elif signal['signal'] in ['SELL', 'STRONG SELL']:
-                    return -1
-                else:
-                    return 0
+        try:
+            # Initialize backtesting engine
+            backtest = BacktestEngine(df_backtest, self.params)
+            
+            # Default strategy function if none provided
+            if backtesting_func is None:
+                def default_strategy(data):
+                    # Safety check for data
+                    if data is None or len(data) == 0:
+                        return 0  # No signal if no data
                     
-            backtesting_func = default_strategy
-        
-        # Run backtest
-        results = backtest.run_backtest(backtesting_func)
-        
-        # Generate detailed report
-        report = backtest.generate_report()
-        
-        return {
-            'backtest_engine': backtest,
-            'results': results,
-            'report': report
-        }
+                    try:
+                        # Initialize indicators
+                        indicators = TechnicalIndicators(data, self.params)
+                        indicators.calculate_all()
+                        
+                        # Get overall signal
+                        signal = indicators.get_overall_signal()
+                        
+                        # Convert signal to numeric (-1, 0, 1)
+                        if signal['signal'] in ['BUY', 'STRONG BUY']:
+                            return 1
+                        elif signal['signal'] in ['SELL', 'STRONG SELL']:
+                            return -1
+                        else:
+                            return 0
+                    except Exception as e:
+                        # Log the error and return neutral signal
+                        print(f"Error in backtest strategy: {str(e)}")
+                        return 0
+                        
+                backtesting_func = default_strategy
+            
+            # Run backtest
+            results = backtest.run_backtest(backtesting_func)
+            
+            # Generate detailed report
+            report = backtest.generate_report()
+            
+            return {
+                'backtest_engine': backtest,
+                'results': results,
+                'report': report
+            }
+        except Exception as e:
+            # Return error information if backtesting fails
+            return {
+                'error': f"Backtesting failed: {str(e)}",
+                'backtest_engine': None,
+                'results': None,
+                'report': None
+            }
 
 
 # ===============================================================
