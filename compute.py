@@ -19,6 +19,7 @@ import sys
 import time
 import traceback
 import uuid
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, List, Union, Tuple, Any, Optional
@@ -2008,48 +2009,62 @@ class TechnicalIndicators:
         sma_periods = self.params.get_indicator_param('sma_periods')
         ema_periods = self.params.get_indicator_param('ema_periods')
         
+        # Initialize new columns dictionary
+        new_cols = {}
+        
         # Calculate SMAs for different periods
         for period in sma_periods:
-            self.df[f'sma_{period}'] = self.df['close'].rolling(window=period).mean()
+            new_cols[f'sma_{period}'] = self.df['close'].rolling(window=period).mean()
         
         # Calculate EMAs for different periods
         for period in ema_periods:
-            self.df[f'ema_{period}'] = self.df['close'].ewm(span=period, adjust=False).mean()
+            new_cols[f'ema_{period}'] = self.df['close'].ewm(span=period, adjust=False).mean()
         
-        # Generate crossover signals
-        # EMA crossover (typically 9 & 21)
-        self.df['ema_crossover'] = 0
+        # Create a temporary copy for calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        
+        # Add MA columns to temp_df for calculations
+        for col_name, col_data in new_cols.items():
+            temp_df[col_name] = col_data
+            
+        # Define key MA variables
         short_ema = f'ema_{ema_periods[0]}'  # Typically 9
         long_ema = f'ema_{ema_periods[1]}'   # Typically 21
+        mid_term = f'sma_{sma_periods[3]}'   # Typically 50
+        long_term = f'sma_{sma_periods[4]}'  # Typically 200
         
-        self.df.loc[self.df[short_ema] > self.df[long_ema], 'ema_crossover'] = 1
-        self.df.loc[self.df[short_ema] < self.df[long_ema], 'ema_crossover'] = -1
+        # Generate crossover signals
+        # EMA crossover signals
+        mask_above = temp_df[short_ema] > temp_df[long_ema]
+        mask_below = temp_df[short_ema] < temp_df[long_ema]
         
-        # Detect crossovers (signals)
-        self.df['ema_buy_signal'] = ((self.df['ema_crossover'].shift(1) == -1) & 
-                                   (self.df['ema_crossover'] == 1)).astype(int)
-        self.df['ema_sell_signal'] = ((self.df['ema_crossover'].shift(1) == 1) & 
-                                    (self.df['ema_crossover'] == -1)).astype(int)
+        new_cols['ema_crossover'] = pd.Series(0, index=self.df.index)
+        new_cols['ema_crossover'].loc[mask_above] = 1
+        new_cols['ema_crossover'].loc[mask_below] = -1
         
-        # Golden Cross / Death Cross (SMA 50 and 200)
-        mid_term = f'sma_{sma_periods[3]}'  # Typically 50
-        long_term = f'sma_{sma_periods[4]}' # Typically 200
+        new_cols['ema_buy_signal'] = ((new_cols['ema_crossover'].shift(1) == -1) & 
+                                    (new_cols['ema_crossover'] == 1)).astype(int)
         
-        self.df['golden_cross'] = ((self.df[mid_term].shift(1) <= self.df[long_term].shift(1)) & 
-                                 (self.df[mid_term] > self.df[long_term])).astype(int)
-        self.df['death_cross'] = ((self.df[mid_term].shift(1) >= self.df[long_term].shift(1)) & 
-                                (self.df[mid_term] < self.df[long_term])).astype(int)
+        new_cols['ema_sell_signal'] = ((new_cols['ema_crossover'].shift(1) == 1) & 
+                                     (new_cols['ema_crossover'] == -1)).astype(int)
+        
+        # Golden Cross / Death Cross
+        new_cols['golden_cross'] = ((temp_df[mid_term].shift(1) <= temp_df[long_term].shift(1)) & 
+                                  (temp_df[mid_term] > temp_df[long_term])).astype(int)
+        
+        new_cols['death_cross'] = ((temp_df[mid_term].shift(1) >= temp_df[long_term].shift(1)) & 
+                                 (temp_df[mid_term] < temp_df[long_term])).astype(int)
         
         # Determine overall trend direction
-        self.df['uptrend'] = (
-            (self.df['close'] > self.df[mid_term]) & 
-            (self.df[mid_term] > self.df[long_term])
-        ).astype(int)
+        new_cols['uptrend'] = ((temp_df['close'] > temp_df[mid_term]) & 
+                             (temp_df[mid_term] > temp_df[long_term])).astype(int)
         
-        self.df['downtrend'] = (
-            (self.df['close'] < self.df[mid_term]) & 
-            (self.df[mid_term] < self.df[long_term])
-        ).astype(int)
+        new_cols['downtrend'] = ((temp_df['close'] < temp_df[mid_term]) & 
+                               (temp_df[mid_term] < temp_df[long_term])).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2059,17 +2074,21 @@ class TechnicalIndicators:
         if self.df['ema_buy_signal'].iloc[-1] == 1:
             current_signal = 1
             signal_strength = 2
+            signal_name = "EMA Crossover"
         elif self.df['ema_sell_signal'].iloc[-1] == 1:
             current_signal = -1
             signal_strength = 2
+            signal_name = "EMA Crossover"
         
         # Check for golden/death cross (stronger signals)
         if self.df['golden_cross'].iloc[-1] == 1:
             current_signal = 1
             signal_strength = 3
+            signal_name = "Golden Cross"
         elif self.df['death_cross'].iloc[-1] == 1:
             current_signal = -1
             signal_strength = 3
+            signal_name = "Death Cross"
         
         # Check price position relative to key MAs for trend confirmation
         price_above_short = self.df['close'].iloc[-1] > self.df[short_ema].iloc[-1]
@@ -2097,12 +2116,6 @@ class TechnicalIndicators:
         
         # Add to signals list if signal exists
         if current_signal != 0:
-            signal_name = "EMA Crossover"
-            if self.df['golden_cross'].iloc[-1] == 1:
-                signal_name = "Golden Cross"
-            elif self.df['death_cross'].iloc[-1] == 1:
-                signal_name = "Death Cross"
-                
             self.signals.append({
                 'indicator': 'Moving Averages',
                 'signal': 'BUY' if current_signal == 1 else 'SELL',
@@ -2117,27 +2130,43 @@ class TechnicalIndicators:
         slow_period = self.params.get_indicator_param('macd_slow')
         signal_period = self.params.get_indicator_param('macd_signal')
         
+        # Initialize new columns dictionary
+        new_cols = {}
+        
         # Calculate MACD components
         fast_ema = self.df['close'].ewm(span=fast_period, adjust=False).mean()
         slow_ema = self.df['close'].ewm(span=slow_period, adjust=False).mean()
         
-        self.df['macd_line'] = fast_ema - slow_ema
-        self.df['signal_line'] = self.df['macd_line'].ewm(span=signal_period, adjust=False).mean()
-        self.df['macd_histogram'] = self.df['macd_line'] - self.df['signal_line']
+        new_cols['macd_line'] = fast_ema - slow_ema
+        new_cols['signal_line'] = new_cols['macd_line'].ewm(span=signal_period, adjust=False).mean()
+        new_cols['macd_histogram'] = new_cols['macd_line'] - new_cols['signal_line']
         
-        # Generate signals based on crossovers
-        self.df['macd_crossover'] = 0
-        self.df.loc[self.df['macd_line'] > self.df['signal_line'], 'macd_crossover'] = 1
-        self.df.loc[self.df['macd_line'] < self.df['signal_line'], 'macd_crossover'] = -1
+        # Create temporary dataframe for crossover calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        for key, val in new_cols.items():
+            temp_df[key] = val
         
-        # Detect crossovers (signals)
-        self.df['macd_buy_signal'] = ((self.df['macd_crossover'].shift(1) == -1) & 
-                                    (self.df['macd_crossover'] == 1)).astype(int)
-        self.df['macd_sell_signal'] = ((self.df['macd_crossover'].shift(1) == 1) & 
-                                     (self.df['macd_crossover'] == -1)).astype(int)
+        # Set crossover values
+        above_mask = temp_df['macd_line'] > temp_df['signal_line']
+        below_mask = temp_df['macd_line'] < temp_df['signal_line']
+        
+        new_cols['macd_crossover'] = pd.Series(0, index=self.df.index)
+        new_cols['macd_crossover'].loc[above_mask] = 1
+        new_cols['macd_crossover'].loc[below_mask] = -1
+        
+        # Detect crossovers
+        new_cols['macd_buy_signal'] = ((new_cols['macd_crossover'].shift(1) == -1) & 
+                                     (new_cols['macd_crossover'] == 1)).astype(int)
+        
+        new_cols['macd_sell_signal'] = ((new_cols['macd_crossover'].shift(1) == 1) & 
+                                      (new_cols['macd_crossover'] == -1)).astype(int)
         
         # Detect histogram direction changes
-        self.df['hist_direction'] = np.sign(self.df['macd_histogram'] - self.df['macd_histogram'].shift(1))
+        new_cols['hist_direction'] = np.sign(temp_df['macd_histogram'] - temp_df['macd_histogram'].shift(1))
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Bullish divergence: Price makes lower lows but MACD makes higher lows
         # Bearish divergence: Price makes higher highs but MACD makes lower highs
@@ -2201,13 +2230,16 @@ class TechnicalIndicators:
                 'strength': signal_strength,
                 'name': signal_type
             })
-    
+            
     def calculate_rsi(self):
         """Calculate Relative Strength Index (RSI)"""
         # Get RSI parameters
         period = self.params.get_indicator_param('rsi_period')
         oversold = self.params.get_indicator_param('rsi_oversold')
         overbought = self.params.get_indicator_param('rsi_overbought')
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate price changes
         delta = self.df['close'].diff()
@@ -2227,20 +2259,26 @@ class TechnicalIndicators:
         rs = avg_gain / avg_loss
         
         # Calculate RSI
-        self.df['rsi'] = 100 - (100 / (1 + rs))
+        new_cols['rsi'] = 100 - (100 / (1 + rs))
+        
+        # Create temporary dataframe
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['rsi'] = new_cols['rsi']
         
         # Generate signals
-        self.df['rsi_oversold'] = self.df['rsi'] < oversold
-        self.df['rsi_overbought'] = self.df['rsi'] > overbought
+        new_cols['rsi_oversold'] = temp_df['rsi'] < oversold
+        new_cols['rsi_overbought'] = temp_df['rsi'] > overbought
         
         # Detect crosses above oversold and below overbought
-        self.df['rsi_buy_signal'] = ((self.df['rsi'] > oversold) & 
-                                   (self.df['rsi'].shift(1) <= oversold)).astype(int)
-        self.df['rsi_sell_signal'] = ((self.df['rsi'] < overbought) & 
-                                    (self.df['rsi'].shift(1) >= overbought)).astype(int)
+        new_cols['rsi_buy_signal'] = ((temp_df['rsi'] > oversold) & 
+                                     (temp_df['rsi'].shift(1) <= oversold)).astype(int)
         
-        # Detect divergences
-        # (Simplified implementation for brevity)
+        new_cols['rsi_sell_signal'] = ((temp_df['rsi'] < overbought) & 
+                                      (temp_df['rsi'].shift(1) >= overbought)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2298,31 +2336,47 @@ class TechnicalIndicators:
         oversold = self.params.get_indicator_param('stoch_oversold')
         overbought = self.params.get_indicator_param('stoch_overbought')
         
+        # Initialize new columns dictionary
+        new_cols = {}
+        
         # Calculate %K (The current close in relation to the range over k_period)
         lowest_low = self.df['low'].rolling(window=k_period).min()
         highest_high = self.df['high'].rolling(window=k_period).max()
-        self.df['stoch_k_raw'] = 100 * ((self.df['close'] - lowest_low) / 
-                                      (highest_high - lowest_low))
+        
+        # Handle division by zero
+        range_hl = highest_high - lowest_low
+        range_hl = np.where(range_hl == 0, 0.0001, range_hl)  # Avoid division by zero
+        
+        new_cols['stoch_k_raw'] = 100 * ((self.df['close'] - lowest_low) / range_hl)
         
         # Apply slowing for %K
-        self.df['stoch_k'] = self.df['stoch_k_raw'].rolling(window=slowing).mean()
+        new_cols['stoch_k'] = pd.Series(new_cols['stoch_k_raw'], index=self.df.index).rolling(window=slowing).mean()
         
         # Calculate %D (Simple moving average of %K)
-        self.df['stoch_d'] = self.df['stoch_k'].rolling(window=d_period).mean()
+        new_cols['stoch_d'] = pd.Series(new_cols['stoch_k'], index=self.df.index).rolling(window=d_period).mean()
+        
+        # Create temporary dataframe
+        temp_df = pd.DataFrame(index=self.df.index)
+        for key, val in new_cols.items():
+            temp_df[key] = val
         
         # Generate signals
-        self.df['stoch_oversold'] = self.df['stoch_k'] < oversold
-        self.df['stoch_overbought'] = self.df['stoch_k'] > overbought
+        new_cols['stoch_oversold'] = temp_df['stoch_k'] < oversold
+        new_cols['stoch_overbought'] = temp_df['stoch_k'] > overbought
         
         # Detect K crossing above D in oversold region
-        self.df['stoch_buy_signal'] = ((self.df['stoch_k'] > self.df['stoch_d']) & 
-                                     (self.df['stoch_k'].shift(1) <= self.df['stoch_d'].shift(1)) &
-                                     (self.df['stoch_k'] < oversold + 5)).astype(int)
+        new_cols['stoch_buy_signal'] = ((temp_df['stoch_k'] > temp_df['stoch_d']) & 
+                                       (temp_df['stoch_k'].shift(1) <= temp_df['stoch_d'].shift(1)) &
+                                       (temp_df['stoch_k'] < oversold + 5)).astype(int)
         
         # Detect K crossing below D in overbought region
-        self.df['stoch_sell_signal'] = ((self.df['stoch_k'] < self.df['stoch_d']) & 
-                                      (self.df['stoch_k'].shift(1) >= self.df['stoch_d'].shift(1)) &
-                                      (self.df['stoch_k'] > overbought - 5)).astype(int)
+        new_cols['stoch_sell_signal'] = ((temp_df['stoch_k'] < temp_df['stoch_d']) & 
+                                        (temp_df['stoch_k'].shift(1) >= temp_df['stoch_d'].shift(1)) &
+                                        (temp_df['stoch_k'] > overbought - 5)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2378,26 +2432,34 @@ class TechnicalIndicators:
         period = self.params.get_indicator_param('bb_period')
         std_dev = self.params.get_indicator_param('bb_std_dev')
         
+        # Initialize new columns dictionary
+        new_cols = {}
+        
         # Calculate middle band (SMA)
-        self.df['bb_middle'] = self.df['close'].rolling(window=period).mean()
+        new_cols['bb_middle'] = self.df['close'].rolling(window=period).mean()
         
         # Calculate standard deviation
-        self.df['bb_std'] = self.df['close'].rolling(window=period).std()
+        new_cols['bb_std'] = self.df['close'].rolling(window=period).std()
         
         # Calculate upper and lower bands
-        self.df['bb_upper'] = self.df['bb_middle'] + (std_dev * self.df['bb_std'])
-        self.df['bb_lower'] = self.df['bb_middle'] - (std_dev * self.df['bb_std'])
+        new_cols['bb_upper'] = new_cols['bb_middle'] + (std_dev * new_cols['bb_std'])
+        new_cols['bb_lower'] = new_cols['bb_middle'] - (std_dev * new_cols['bb_std'])
         
         # Calculate %B (position within bands)
-        self.df['bb_pct_b'] = (self.df['close'] - self.df['bb_lower']) / (self.df['bb_upper'] - self.df['bb_lower'])
+        bb_range = new_cols['bb_upper'] - new_cols['bb_lower']
+        bb_range = np.where(bb_range == 0, 0.0001, bb_range)  # Avoid division by zero
+        new_cols['bb_pct_b'] = (self.df['close'] - new_cols['bb_lower']) / bb_range
         
         # Calculate bandwidth
-        self.df['bb_bandwidth'] = (self.df['bb_upper'] - self.df['bb_lower']) / self.df['bb_middle']
+        new_cols['bb_bandwidth'] = bb_range / new_cols['bb_middle']
         
-        # Generate signals
-        # Price touching or breaking bands
-        self.df['bb_touch_upper'] = self.df['high'] >= self.df['bb_upper']
-        self.df['bb_touch_lower'] = self.df['low'] <= self.df['bb_lower']
+        # Generate signals - price touching or breaking bands
+        new_cols['bb_touch_upper'] = self.df['high'] >= new_cols['bb_upper']
+        new_cols['bb_touch_lower'] = self.df['low'] <= new_cols['bb_lower']
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
