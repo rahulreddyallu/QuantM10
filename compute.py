@@ -6316,7 +6316,7 @@ class TradingSignalBot:
         
         Args:
             instrument_key: Instrument identifier
-            interval: Time interval (must be one of: 1minute, 30minute, day, week, month)
+            interval: Time interval (one of: 1minute, 30minute, day, week, month)
             from_date: Start date (YYYY-MM-DD)
             to_date: End date (YYYY-MM-DD)
         
@@ -6367,9 +6367,9 @@ class TradingSignalBot:
                 self.logger.info(f"Calling get_historical_candle_data1")
                 historical_data = self.client.get_historical_candle_data1(
                     instrument_key=instrument_key,
-                    interval=interval,  # Ensure valid values: 1minute, 30minute, day, week, month
-                    to_date=to_date,    # Use YYYY-MM-DD format, not epoch
-                    from_date=from_date,# Use YYYY-MM-DD format, not epoch
+                    interval=interval,  # Valid values: 1minute, 30minute, day, week, month
+                    to_date=to_date,    # Use YYYY-MM-DD format
+                    from_date=from_date,# Use YYYY-MM-DD format
                     api_version=api_version
                 )
             except Exception as e:
@@ -6412,17 +6412,23 @@ class TradingSignalBot:
                     self.logger.error(f"Unexpected response type: {type(historical_data)}")
                     return None
             
-            # Step 5: Create DataFrame
+            # Step 5: Create DataFrame - WITH ALL 7 COLUMNS
             if not candles or len(candles) == 0:
                 self.logger.warning(f"No candle data found for {instrument_key}")
                 return None
                 
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            # Create DataFrame with all 7 columns as per Upstox API documentation
+            df = pd.DataFrame(candles, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume', 'open_interest'
+            ])
+            
+            # Convert timestamp to datetime
+            df['timestamp'] = pd.to_datetime(df['timestamp'])
             df.set_index('timestamp', inplace=True)
             
             # Convert columns to numeric types
-            for col in ['open', 'high', 'low', 'close', 'volume']:
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'open_interest']
+            for col in numeric_cols:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col])
                     
