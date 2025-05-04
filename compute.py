@@ -80,14 +80,14 @@ class EmptyDataError(DataFetchError):
 class TradingParameters:
     """Centralized configuration for all trading parameters and thresholds"""
     
-    def __init__(self, config=None):
+    def __init__(self, config):
         """
         Initialize with parameters from config or use defaults
         
         Args:
             config: Optional configuration dictionary to override defaults
         """
-        self.config = config or {}
+        self.config = config
         
         # Pattern detection thresholds
         self.PATTERN_THRESHOLDS = {
