@@ -2531,55 +2531,78 @@ class TechnicalIndicators:
         period = self.params.get_indicator_param('supertrend_period')
         multiplier = self.params.get_indicator_param('supertrend_multiplier')
         
-        # Calculate ATR
+        # Calculate ATR if not already present
         if 'atr' not in self.df.columns:
             self.calculate_atr()
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate basic bands
         hl2 = (self.df['high'] + self.df['low']) / 2
         
-        # Calculate upper and lower bands
-        self.df['supertrend_basic_upper'] = hl2 + (multiplier * self.df['atr'])
-        self.df['supertrend_basic_lower'] = hl2 - (multiplier * self.df['atr'])
+        # Calculate basic upper and lower bands
+        new_cols['supertrend_basic_upper'] = hl2 + (multiplier * self.df['atr'])
+        new_cols['supertrend_basic_lower'] = hl2 - (multiplier * self.df['atr'])
         
-        # Initialize Supertrend columns
-        self.df['supertrend_upper'] = 0.0
-        self.df['supertrend_lower'] = 0.0
-        self.df['supertrend'] = 0.0
-        self.df['supertrend_direction'] = 0  # 1 for bullish, -1 for bearish
+        # Initialize arrays for Supertrend calculations
+        len_df = len(self.df)
+        supertrend_upper = np.zeros(len_df)
+        supertrend_lower = np.zeros(len_df)
+        supertrend = np.zeros(len_df)
+        supertrend_direction = np.zeros(len_df)
         
-        # Calculate Supertrend
-        for i in range(period, len(self.df)):
+        # Pre-fill the arrays with the basic values
+        basic_upper = new_cols['supertrend_basic_upper'].values
+        basic_lower = new_cols['supertrend_basic_lower'].values
+        close_prices = self.df['close'].values
+        
+        # Calculate Supertrend using arrays (avoiding DataFrame indexing in the loop)
+        for i in range(period, len_df):
             # Upper band
-            if ((self.df['supertrend_basic_upper'].iloc[i] < self.df['supertrend_upper'].iloc[i-1]) or 
-                (self.df['close'].iloc[i-1] > self.df['supertrend_upper'].iloc[i-1])):
-                self.df.loc[self.df.index[i], 'supertrend_upper'] = self.df['supertrend_basic_upper'].iloc[i]
+            if ((basic_upper[i] < supertrend_upper[i-1]) or 
+                (close_prices[i-1] > supertrend_upper[i-1])):
+                supertrend_upper[i] = basic_upper[i]
             else:
-                self.df.loc[self.df.index[i], 'supertrend_upper'] = self.df['supertrend_upper'].iloc[i-1]
+                supertrend_upper[i] = supertrend_upper[i-1]
             
             # Lower band
-            if ((self.df['supertrend_basic_lower'].iloc[i] > self.df['supertrend_lower'].iloc[i-1]) or 
-                (self.df['close'].iloc[i-1] < self.df['supertrend_lower'].iloc[i-1])):
-                self.df.loc[self.df.index[i], 'supertrend_lower'] = self.df['supertrend_basic_lower'].iloc[i]
+            if ((basic_lower[i] > supertrend_lower[i-1]) or 
+                (close_prices[i-1] < supertrend_lower[i-1])):
+                supertrend_lower[i] = basic_lower[i]
             else:
-                self.df.loc[self.df.index[i], 'supertrend_lower'] = self.df['supertrend_lower'].iloc[i-1]
+                supertrend_lower[i] = supertrend_lower[i-1]
             
             # Supertrend
-            if (self.df['close'].iloc[i] > self.df['supertrend_upper'].iloc[i-1]):
-                self.df.loc[self.df.index[i], 'supertrend'] = self.df['supertrend_lower'].iloc[i]
-                self.df.loc[self.df.index[i], 'supertrend_direction'] = 1
-            elif (self.df['close'].iloc[i] < self.df['supertrend_lower'].iloc[i-1]):
-                self.df.loc[self.df.index[i], 'supertrend'] = self.df['supertrend_upper'].iloc[i]
-                self.df.loc[self.df.index[i], 'supertrend_direction'] = -1
+            if close_prices[i] > supertrend_upper[i-1]:
+                supertrend[i] = supertrend_lower[i]
+                supertrend_direction[i] = 1  # Bullish
+            elif close_prices[i] < supertrend_lower[i-1]:
+                supertrend[i] = supertrend_upper[i]
+                supertrend_direction[i] = -1  # Bearish
             else:
-                self.df.loc[self.df.index[i], 'supertrend'] = self.df['supertrend'].iloc[i-1]
-                self.df.loc[self.df.index[i], 'supertrend_direction'] = self.df['supertrend_direction'].iloc[i-1]
+                supertrend[i] = supertrend[i-1]
+                supertrend_direction[i] = supertrend_direction[i-1]
+        
+        # Add calculated arrays to new columns dictionary
+        new_cols['supertrend_upper'] = pd.Series(supertrend_upper, index=self.df.index)
+        new_cols['supertrend_lower'] = pd.Series(supertrend_lower, index=self.df.index)
+        new_cols['supertrend'] = pd.Series(supertrend, index=self.df.index)
+        new_cols['supertrend_direction'] = pd.Series(supertrend_direction, index=self.df.index)
         
         # Generate signals for crossovers
-        self.df['supertrend_buy_signal'] = ((self.df['supertrend_direction'] == 1) & 
-                                         (self.df['supertrend_direction'].shift(1) == -1)).astype(int)
-        self.df['supertrend_sell_signal'] = ((self.df['supertrend_direction'] == -1) & 
-                                          (self.df['supertrend_direction'].shift(1) == 1)).astype(int)
+        direction_shifted = np.zeros(len_df)
+        direction_shifted[1:] = supertrend_direction[:-1]  # Shift by 1
+        
+        supertrend_buy_signal = (supertrend_direction == 1) & (direction_shifted == -1)
+        supertrend_sell_signal = (supertrend_direction == -1) & (direction_shifted == 1)
+        
+        new_cols['supertrend_buy_signal'] = pd.Series(supertrend_buy_signal, index=self.df.index).astype(int)
+        new_cols['supertrend_sell_signal'] = pd.Series(supertrend_sell_signal, index=self.df.index).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2691,15 +2714,27 @@ class TechnicalIndicators:
                         ep[i] = ep[i-1]  # Keep previous extreme point
                         af_current[i] = af_current[i-1]  # Keep previous acceleration factor
         
-        # Add calculated values to dataframe
-        self.df['psar'] = sar
-        self.df['psar_trend'] = trend
+        # Initialize new columns dictionary
+        new_cols = {}
         
-        # Generate signals for crossovers
-        self.df['psar_buy_signal'] = ((self.df['psar_trend'] == 1) & 
-                                    (self.df['psar_trend'].shift(1) == -1)).astype(int)
-        self.df['psar_sell_signal'] = ((self.df['psar_trend'] == -1) & 
-                                     (self.df['psar_trend'].shift(1) == 1)).astype(int)
+        # Store calculated values in dictionary
+        new_cols['psar'] = pd.Series(sar, index=self.df.index)
+        new_cols['psar_trend'] = pd.Series(trend, index=self.df.index)
+        
+        # Calculate buy/sell signals directly from arrays
+        # Shifted trend array for comparison
+        trend_shifted = np.zeros_like(trend)
+        trend_shifted[1:] = trend[:-1]  # shift right by 1
+        
+        buy_signal = (trend == 1) & (trend_shifted == -1)
+        sell_signal = (trend == -1) & (trend_shifted == 1)
+        
+        new_cols['psar_buy_signal'] = pd.Series(buy_signal, index=self.df.index).astype(int)
+        new_cols['psar_sell_signal'] = pd.Series(sell_signal, index=self.df.index).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2751,19 +2786,28 @@ class TechnicalIndicators:
         # Get ATR parameters
         period = self.params.get_indicator_param('atr_period')
         
+        # Initialize new columns dictionary
+        new_cols = {}
+        
         # Calculate True Range
         high_low = self.df['high'] - self.df['low']
         high_close_prev = abs(self.df['high'] - self.df['close'].shift(1))
         low_close_prev = abs(self.df['low'] - self.df['close'].shift(1))
         
         # Take the maximum of the three
-        self.df['tr'] = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
+        new_cols['tr'] = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
         
         # Calculate ATR (simple moving average of TR for first 'period' values, then smoothed)
-        self.df['atr'] = self.df['tr'].rolling(window=period).mean()
+        new_cols['atr'] = new_cols['tr'].rolling(window=period).mean()
         
         # Calculate ATR percentage (relative to price)
-        self.df['atr_pct'] = 100 * self.df['atr'] / self.df['close']
+        # Avoid division by zero
+        close_non_zero = np.where(self.df['close'] == 0, 0.0001, self.df['close'])
+        new_cols['atr_pct'] = 100 * new_cols['atr'] / close_non_zero
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # ATR doesn't generate signals directly, but provides volatility information
         atr_value = self.df['atr'].iloc[-1]
@@ -2791,17 +2835,29 @@ class TechnicalIndicators:
             self.calculate_atr()
             
         # Get parameters
-        multiplier_upper = self.params.get_indicator_param('atr_bands')['multiplier_upper']
-        multiplier_lower = self.params.get_indicator_param('atr_bands')['multiplier_lower']
+        try:
+            atr_bands_params = self.params.get_indicator_param('atr_bands')
+            multiplier_upper = atr_bands_params.get('multiplier_upper', 2.0)
+            multiplier_lower = atr_bands_params.get('multiplier_lower', 2.0)
+        except:
+            multiplier_upper = 2.0
+            multiplier_lower = 2.0
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate ATR Bands
-        self.df['atr_band_middle'] = self.df['close'].rolling(window=20).mean()  # 20-period SMA
-        self.df['atr_band_upper'] = self.df['atr_band_middle'] + (multiplier_upper * self.df['atr'])
-        self.df['atr_band_lower'] = self.df['atr_band_middle'] - (multiplier_lower * self.df['atr'])
+        new_cols['atr_band_middle'] = self.df['close'].rolling(window=20).mean()  # 20-period SMA
+        new_cols['atr_band_upper'] = new_cols['atr_band_middle'] + (multiplier_upper * self.df['atr'])
+        new_cols['atr_band_lower'] = new_cols['atr_band_middle'] - (multiplier_lower * self.df['atr'])
         
         # Generate signals
-        self.df['atr_band_touch_upper'] = self.df['high'] >= self.df['atr_band_upper']
-        self.df['atr_band_touch_lower'] = self.df['low'] <= self.df['atr_band_lower']
+        new_cols['atr_band_touch_upper'] = self.df['high'] >= new_cols['atr_band_upper']
+        new_cols['atr_band_touch_lower'] = self.df['low'] <= new_cols['atr_band_lower']
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Check for band touches in recent periods
         lookback = 5
@@ -2859,55 +2915,72 @@ class TechnicalIndicators:
         period = self.params.get_indicator_param('adx_period')
         threshold = self.params.get_indicator_param('adx_threshold')
         
-        # Calculate True Range
+        # Initialize new columns dictionary
+        new_cols = {}
+        
+        # Calculate True Range if not already calculated
         if 'tr' not in self.df.columns:
             high_low = self.df['high'] - self.df['low']
             high_close_prev = abs(self.df['high'] - self.df['close'].shift(1))
             low_close_prev = abs(self.df['low'] - self.df['close'].shift(1))
-            self.df['tr'] = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
+            new_cols['tr'] = np.maximum(high_low, np.maximum(high_close_prev, low_close_prev))
+        else:
+            # Use existing TR
+            new_cols['tr'] = self.df['tr']
         
         # Calculate Directional Movement
-        self.df['up_move'] = self.df['high'] - self.df['high'].shift(1)
-        self.df['down_move'] = self.df['low'].shift(1) - self.df['low']
+        new_cols['up_move'] = self.df['high'] - self.df['high'].shift(1)
+        new_cols['down_move'] = self.df['low'].shift(1) - self.df['low']
         
         # Calculate Positive (DM+) and Negative (DM-) Directional Movement
-        self.df['dm_plus'] = np.where(
-            (self.df['up_move'] > self.df['down_move']) & (self.df['up_move'] > 0),
-            self.df['up_move'],
+        dm_plus = np.where(
+            (new_cols['up_move'] > new_cols['down_move']) & (new_cols['up_move'] > 0),
+            new_cols['up_move'],
             0
         )
         
-        self.df['dm_minus'] = np.where(
-            (self.df['down_move'] > self.df['up_move']) & (self.df['down_move'] > 0),
-            self.df['down_move'],
+        dm_minus = np.where(
+            (new_cols['down_move'] > new_cols['up_move']) & (new_cols['down_move'] > 0),
+            new_cols['down_move'],
             0
         )
+        
+        new_cols['dm_plus'] = pd.Series(dm_plus, index=self.df.index)
+        new_cols['dm_minus'] = pd.Series(dm_minus, index=self.df.index)
         
         # Calculate Smoothed Directional Movement and True Range
-        self.df['tr_period'] = self.df['tr'].rolling(window=period).sum()
-        self.df['dm_plus_period'] = self.df['dm_plus'].rolling(window=period).sum()
-        self.df['dm_minus_period'] = self.df['dm_minus'].rolling(window=period).sum()
+        new_cols['tr_period'] = new_cols['tr'].rolling(window=period).sum()
+        new_cols['dm_plus_period'] = new_cols['dm_plus'].rolling(window=period).sum()
+        new_cols['dm_minus_period'] = new_cols['dm_minus'].rolling(window=period).sum()
         
         # Calculate Directional Indicators (DI+ and DI-)
-        self.df['di_plus'] = 100 * self.df['dm_plus_period'] / self.df['tr_period']
-        self.df['di_minus'] = 100 * self.df['dm_minus_period'] / self.df['tr_period']
+        # Handle division by zero
+        tr_period_non_zero = np.where(new_cols['tr_period'] == 0, 0.0001, new_cols['tr_period'])
+        
+        new_cols['di_plus'] = 100 * new_cols['dm_plus_period'] / tr_period_non_zero
+        new_cols['di_minus'] = 100 * new_cols['dm_minus_period'] / tr_period_non_zero
         
         # Calculate Directional Index (DX)
-        self.df['dx'] = 100 * abs(self.df['di_plus'] - self.df['di_minus']) / (self.df['di_plus'] + self.df['di_minus'])
+        di_sum = new_cols['di_plus'] + new_cols['di_minus']
+        di_sum_non_zero = np.where(di_sum == 0, 0.0001, di_sum)  # Avoid division by zero
+        new_cols['dx'] = 100 * abs(new_cols['di_plus'] - new_cols['di_minus']) / di_sum_non_zero
         
         # Calculate ADX (Average of DX)
-        self.df['adx'] = self.df['dx'].rolling(window=period).mean()
+        new_cols['adx'] = new_cols['dx'].rolling(window=period).mean()
         
-        # Generate signals
-        # Strong trend when ADX is above threshold
-        self.df['adx_strong_trend'] = self.df['adx'] > threshold
+        # Generate signals - Strong trend when ADX is above threshold
+        new_cols['adx_strong_trend'] = new_cols['adx'] > threshold
         
         # Direction of trend based on DI+ vs DI-
-        self.df['adx_trend_direction'] = np.where(
-            self.df['di_plus'] > self.df['di_minus'],
+        new_cols['adx_trend_direction'] = np.where(
+            new_cols['di_plus'] > new_cols['di_minus'],
             1,  # Bullish
             -1  # Bearish
         )
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -2923,7 +2996,7 @@ class TechnicalIndicators:
         
         # Check if DI+ crosses above DI- (buy signal)
         di_crossover_buy = (self.df['di_plus'].iloc[-1] > self.df['di_minus'].iloc[-1]) and \
-                           (self.df['di_plus'].iloc[-2] <= self.df['di_minus'].iloc[-2])
+                          (self.df['di_plus'].iloc[-2] <= self.df['di_minus'].iloc[-2])
         
         # Check if DI- crosses above DI+ (sell signal)
         di_crossover_sell = (self.df['di_minus'].iloc[-1] > self.df['di_plus'].iloc[-1]) and \
@@ -2977,69 +3050,72 @@ class TechnicalIndicators:
         uptrend_threshold = self.params.get_indicator_param('aroon_uptrend')
         downtrend_threshold = self.params.get_indicator_param('aroon_downtrend')
         
-        # Calculate days since highest high and lowest low in period window
-        # This is vectorized using rolling window operations
+        # Initialize new columns dictionary
+        new_cols = {}
         
-        # For each window, find the index of the maximum/minimum value
-        rolling_high = self.df['high'].rolling(window=period)
-        rolling_low = self.df['low'].rolling(window=period)
+        # Prepare arrays for Aroon Up and Down
+        aroon_up = np.full(len(self.df), np.nan)
+        aroon_down = np.full(len(self.df), np.nan)
         
-        # Aroon Up: 100 * ((period - days since highest high) / period)
-        # Aroon Down: 100 * ((period - days since lowest low) / period)
-        
-        # For Aroon Up: Find the position of the max high within each window
-        self.df['aroon_up'] = np.nan
-        
-        # For Aroon Down: Find the position of the min low within each window
-        self.df['aroon_down'] = np.nan
-        
-        # Loop implementation for clarity - could be vectorized for larger data
+        # Calculate Aroon values using NumPy arrays for performance
+        # Loop implementation - could be vectorized but for clarity we'll use a loop
         for i in range(period, len(self.df)):
-            window_high = self.df['high'].iloc[i-period+1:i+1]
-            window_low = self.df['low'].iloc[i-period+1:i+1]
+            # Get the window for calculation
+            window_high = self.df['high'].iloc[i-period+1:i+1].values
+            window_low = self.df['low'].iloc[i-period+1:i+1].values
             
-            # Calculate days since highest high in window
-            days_since_high = period - 1 - window_high.values.argmax()
-            
-            # Calculate days since lowest low in window
-            days_since_low = period - 1 - window_low.values.argmin()
+            # Calculate days since highest high and lowest low in window
+            days_since_high = period - 1 - np.argmax(window_high)
+            days_since_low = period - 1 - np.argmin(window_low)
             
             # Calculate Aroon Up/Down
-            self.df.loc[self.df.index[i], 'aroon_up'] = 100 * (period - days_since_high) / period
-            self.df.loc[self.df.index[i], 'aroon_down'] = 100 * (period - days_since_low) / period
+            aroon_up[i] = 100 * (period - days_since_high) / period
+            aroon_down[i] = 100 * (period - days_since_low) / period
+        
+        # Add Aroon Up/Down to new columns dictionary
+        new_cols['aroon_up'] = pd.Series(aroon_up, index=self.df.index)
+        new_cols['aroon_down'] = pd.Series(aroon_down, index=self.df.index)
         
         # Calculate Aroon Oscillator
-        self.df['aroon_oscillator'] = self.df['aroon_up'] - self.df['aroon_down']
+        new_cols['aroon_oscillator'] = new_cols['aroon_up'] - new_cols['aroon_down']
         
-        # Generate signals
-        # Strong uptrend when Aroon Up > threshold and Aroon Down < threshold
-        self.df['aroon_strong_uptrend'] = (
-            (self.df['aroon_up'] > uptrend_threshold) & 
-            (self.df['aroon_down'] < downtrend_threshold)
+        # Create temporary dataframe for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['aroon_up'] = new_cols['aroon_up']
+        temp_df['aroon_down'] = new_cols['aroon_down']
+        
+        # Generate signals - Strong uptrend/downtrend
+        new_cols['aroon_strong_uptrend'] = (
+            (temp_df['aroon_up'] > uptrend_threshold) & 
+            (temp_df['aroon_down'] < downtrend_threshold)
         )
         
-        # Strong downtrend when Aroon Down > threshold and Aroon Up < threshold
-        self.df['aroon_strong_downtrend'] = (
-            (self.df['aroon_down'] > uptrend_threshold) & 
-            (self.df['aroon_up'] < downtrend_threshold)
+        new_cols['aroon_strong_downtrend'] = (
+            (temp_df['aroon_down'] > uptrend_threshold) & 
+            (temp_df['aroon_up'] < downtrend_threshold)
         )
         
-        # Crossovers
-        self.df['aroon_crossover'] = 0
-        self.df.loc[self.df['aroon_up'] > self.df['aroon_down'], 'aroon_crossover'] = 1
-        self.df.loc[self.df['aroon_up'] < self.df['aroon_down'], 'aroon_crossover'] = -1
+        # Create crossover signals
+        new_cols['aroon_crossover'] = np.zeros(len(self.df))
+        above_mask = temp_df['aroon_up'] > temp_df['aroon_down']
+        below_mask = temp_df['aroon_up'] < temp_df['aroon_down']
         
-        # Detect bullish crossover (Aroon Up crosses above Aroon Down)
-        self.df['aroon_buy_signal'] = (
-            (self.df['aroon_crossover'] == 1) & 
-            (self.df['aroon_crossover'].shift(1) == -1)
-        ).astype(int)
+        new_cols['aroon_crossover'][above_mask] = 1
+        new_cols['aroon_crossover'][below_mask] = -1
         
-        # Detect bearish crossover (Aroon Down crosses above Aroon Up)
-        self.df['aroon_sell_signal'] = (
-            (self.df['aroon_crossover'] == -1) & 
-            (self.df['aroon_crossover'].shift(1) == 1)
-        ).astype(int)
+        # Convert to Series for shift operation
+        crossover_series = pd.Series(new_cols['aroon_crossover'], index=self.df.index)
+        
+        # Detect bullish and bearish crossovers
+        new_cols['aroon_buy_signal'] = ((crossover_series == 1) & 
+                                      (crossover_series.shift(1) == -1)).astype(int)
+        
+        new_cols['aroon_sell_signal'] = ((crossover_series == -1) & 
+                                       (crossover_series.shift(1) == 1)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3095,43 +3171,66 @@ class TechnicalIndicators:
             self.indicators['obv'] = {'signal': 0, 'error': 'No volume data available'}
             return
         
-        # Calculate OBV
-        obv = np.zeros(len(self.df))
-        obv[0] = self.df['volume'].iloc[0]
+        # Initialize new columns dictionary
+        new_cols = {}
         
+        # Calculate OBV using arrays for performance
+        close_prices = self.df['close'].values
+        volumes = self.df['volume'].values
+        
+        obv = np.zeros(len(self.df))
+        obv[0] = volumes[0]
+        
+        # Calculate using NumPy for better performance
         for i in range(1, len(self.df)):
-            if self.df['close'].iloc[i] > self.df['close'].iloc[i-1]:
-                obv[i] = obv[i-1] + self.df['volume'].iloc[i]
-            elif self.df['close'].iloc[i] < self.df['close'].iloc[i-1]:
-                obv[i] = obv[i-1] - self.df['volume'].iloc[i]
+            if close_prices[i] > close_prices[i-1]:
+                obv[i] = obv[i-1] + volumes[i]
+            elif close_prices[i] < close_prices[i-1]:
+                obv[i] = obv[i-1] - volumes[i]
             else:
                 obv[i] = obv[i-1]
         
-        self.df['obv'] = obv
+        # Add OBV to new columns dictionary
+        new_cols['obv'] = pd.Series(obv, index=self.df.index)
         
         # Calculate OBV moving average
-        self.df['obv_ma'] = self.df['obv'].rolling(window=20).mean()
+        new_cols['obv_ma'] = new_cols['obv'].rolling(window=20).mean()
         
-        # Generate signals
-        # Signal based on OBV vs its moving average
-        self.df['obv_signal'] = 0
-        self.df.loc[self.df['obv'] > self.df['obv_ma'], 'obv_signal'] = 1
-        self.df.loc[self.df['obv'] < self.df['obv_ma'], 'obv_signal'] = -1
+        # Generate signals - need temp DataFrame for signal calculations
+        temp_df = pd.DataFrame(index=self.df.index)
+        temp_df['obv'] = new_cols['obv']
+        temp_df['obv_ma'] = new_cols['obv_ma']
+        
+        # Calculate OBV vs its moving average
+        new_cols['obv_signal'] = np.zeros(len(self.df))
+        above_mask = temp_df['obv'] > temp_df['obv_ma']
+        below_mask = temp_df['obv'] < temp_df['obv_ma']
+        
+        new_cols['obv_signal'][above_mask] = 1
+        new_cols['obv_signal'][below_mask] = -1
+        
+        # Convert to Series for shift operation
+        obv_signal_series = pd.Series(new_cols['obv_signal'], index=self.df.index)
         
         # Detect crossovers
-        self.df['obv_buy_signal'] = ((self.df['obv_signal'] == 1) & 
-                                   (self.df['obv_signal'].shift(1) == -1)).astype(int)
-        self.df['obv_sell_signal'] = ((self.df['obv_signal'] == -1) & 
-                                    (self.df['obv_signal'].shift(1) == 1)).astype(int)
+        new_cols['obv_buy_signal'] = ((obv_signal_series == 1) & 
+                                    (obv_signal_series.shift(1) == -1)).astype(int)
+        
+        new_cols['obv_sell_signal'] = ((obv_signal_series == -1) & 
+                                     (obv_signal_series.shift(1) == 1)).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Check for divergence (simplified calculation)
-        # Bullish divergence: Price making lower lows but OBV making higher lows
-        # Bearish divergence: Price making higher highs but OBV making lower highs
-        
         # Get last 20 periods for local analysis
         last_n = 20
+        bullish_div = False
+        bearish_div = False
+        
         if len(self.df) > last_n:
-            subset = self.df.iloc[-last_n:]
+            subset = self.df.iloc[-last_n:].copy()
             
             # Get local min/max for price and OBV
             price_min_idx = subset['close'].idxmin()
@@ -3140,11 +3239,8 @@ class TechnicalIndicators:
             obv_max_idx = subset['obv'].idxmax()
             
             # Check if the timing of min/max values shows divergence
-            bullish_div = price_min_idx > obv_min_idx and self.df['close'].iloc[-1] < self.df['close'].iloc[-10].mean()
-            bearish_div = price_max_idx > obv_max_idx and self.df['close'].iloc[-1] > self.df['close'].iloc[-10].mean()
-        else:
-            bullish_div = False
-            bearish_div = False
+            bullish_div = price_min_idx > obv_min_idx and self.df['close'].iloc[-1] < self.df['close'].iloc[-10:].mean()
+            bearish_div = price_max_idx > obv_max_idx and self.df['close'].iloc[-1] > self.df['close'].iloc[-10:].mean()
         
         # Generate signal
         current_signal = 0
@@ -3204,56 +3300,86 @@ class TechnicalIndicators:
             return
         
         # Get parameters
-        reset_period = self.params.get_indicator_param('vwap')['reset_period']
+        try:
+            vwap_params = self.params.get_indicator_param('vwap')
+            reset_period = vwap_params.get('reset_period', 'day')
+        except:
+            reset_period = 'day'
+        
+        # Initialize new columns dictionary
+        new_cols = {}
         
         # Calculate typical price
-        self.df['typical_price'] = (self.df['high'] + self.df['low'] + self.df['close']) / 3
+        new_cols['typical_price'] = (self.df['high'] + self.df['low'] + self.df['close']) / 3
         
         # Calculate volume * typical price
-        self.df['vol_tp'] = self.df['typical_price'] * self.df['volume']
+        new_cols['vol_tp'] = new_cols['typical_price'] * self.df['volume']
+        
+        # Initialize VWAP array with zeros
+        vwap = np.zeros(len(self.df))
         
         # Reset cumulative values at the start of each period
         if reset_period == 'day':
             # Check if index includes date information
             if pd.api.types.is_datetime64_any_dtype(self.df.index):
                 # Create date groups
-                self.df['date_group'] = self.df.index.date
+                date_groups = pd.Series([d.date() for d in self.df.index], index=self.df.index)
                 
-                # Calculate group-wise VWAP
-                groups = self.df.groupby('date_group')
-                
-                # Initialize VWAP column
-                self.df['vwap'] = 0.0
-                
-                # Calculate VWAP for each group
-                for name, group in groups:
-                    cumulative_vol_tp = group['vol_tp'].cumsum()
-                    cumulative_vol = group['volume'].cumsum()
+                # Calculate VWAP for each date group
+                for date in pd.unique(date_groups):
+                    # Get indices for this date
+                    mask = [d == date for d in date_groups]
+                    
+                    # Calculate cumulative values
+                    cum_vol_tp = new_cols['vol_tp'][mask].cumsum()
+                    cum_vol = self.df['volume'][mask].cumsum()
                     
                     # Avoid division by zero
-                    mask = cumulative_vol > 0
-                    group_vwap = pd.Series(np.where(mask, cumulative_vol_tp / cumulative_vol, 0), index=group.index)
+                    cum_vol = np.where(cum_vol == 0, 0.0001, cum_vol)
                     
-                    # Assign VWAP values back to main dataframe
-                    self.df.loc[group.index, 'vwap'] = group_vwap
-                
-                # Remove the date_group column
-                self.df.drop('date_group', axis=1, inplace=True)
+                    # Calculate VWAP
+                    vwap_vals = cum_vol_tp / cum_vol
+                    
+                    # Assign VWAP values to the appropriate indices in the array
+                    indices = np.where(mask)[0]
+                    vwap[indices] = vwap_vals.values
             else:
-                # If index doesn't have date information, use a simple approach
-                self.df['vwap'] = self.df['vol_tp'].cumsum() / self.df['volume'].cumsum()
+                # If index doesn't have date information, just use cumulative values
+                cum_vol_tp = new_cols['vol_tp'].cumsum()
+                cum_vol = self.df['volume'].cumsum()
+                
+                # Avoid division by zero
+                cum_vol = np.where(cum_vol == 0, 0.0001, cum_vol)
+                
+                # Calculate VWAP
+                vwap = cum_vol_tp / cum_vol
         else:
             # No reset, calculate cumulative VWAP
-            self.df['vwap'] = self.df['vol_tp'].cumsum() / self.df['volume'].cumsum()
+            cum_vol_tp = new_cols['vol_tp'].cumsum()
+            cum_vol = self.df['volume'].cumsum()
+            
+            # Avoid division by zero
+            cum_vol = np.where(cum_vol == 0, 0.0001, cum_vol)
+            
+            # Calculate VWAP
+            vwap = cum_vol_tp / cum_vol
+        
+        # Add VWAP to new columns dictionary
+        new_cols['vwap'] = pd.Series(vwap, index=self.df.index)
         
         # Generate signals
-        self.df['price_above_vwap'] = self.df['close'] > self.df['vwap']
+        new_cols['price_above_vwap'] = self.df['close'] > new_cols['vwap']
         
         # Detect crosses above/below VWAP
-        self.df['vwap_cross_above'] = ((self.df['close'] > self.df['vwap']) & 
-                                      (self.df['close'].shift(1) <= self.df['vwap'].shift(1))).astype(int)
-        self.df['vwap_cross_below'] = ((self.df['close'] < self.df['vwap']) & 
-                                      (self.df['close'].shift(1) >= self.df['vwap'].shift(1))).astype(int)
+        new_cols['vwap_cross_above'] = ((self.df['close'] > new_cols['vwap']) & 
+                                      (self.df['close'].shift(1) <= new_cols['vwap'].shift(1))).astype(int)
+        
+        new_cols['vwap_cross_below'] = ((self.df['close'] < new_cols['vwap']) & 
+                                      (self.df['close'].shift(1) >= new_cols['vwap'].shift(1))).astype(int)
+        
+        # Add all new columns to DataFrame at once
+        for col_name, col_data in new_cols.items():
+            self.df[col_name] = col_data
         
         # Generate signal
         current_signal = 0
@@ -3281,16 +3407,22 @@ class TechnicalIndicators:
             signal_strength = 1
         
         # Confirmation by volume
-        if self.df['high_volume'].iloc[-1] if 'high_volume' in self.df.columns else False:
+        if 'high_volume' in self.df.columns and self.df['high_volume'].iloc[-1]:
             signal_type += " with High Volume"
             signal_strength += 1
+        
+        # Calculate price to VWAP ratio safely (avoid division by zero)
+        if self.df['vwap'].iloc[-1] != 0:
+            price_to_vwap = self.df['close'].iloc[-1] / self.df['vwap'].iloc[-1]
+        else:
+            price_to_vwap = 1.0
         
         self.indicators['vwap'] = {
             'signal': current_signal,
             'signal_strength': signal_strength,
             'values': {
                 'vwap': round(self.df['vwap'].iloc[-1], 2),
-                'price_to_vwap': round(self.df['close'].iloc[-1] / self.df['vwap'].iloc[-1], 3),
+                'price_to_vwap': round(price_to_vwap, 3),
                 'crossed_above': self.df['vwap_cross_above'].iloc[-1] == 1,
                 'crossed_below': self.df['vwap_cross_below'].iloc[-1] == 1,
                 'signal_type': signal_type
