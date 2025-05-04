@@ -6310,20 +6310,21 @@ class TradingSignalBot:
         
         self.logger.info("Trading Signal Bot initialized successfully")
     
-    async def get_historical_data(self, instrument_key, interval="day", days=60):
+    async def get_historical_data(self, instrument_key, interval="day", from_date=None, to_date=None):
         """
-        Fetch historical OHLCV data from Upstox
+        Get historical OHLCV data from Upstox
         
         Args:
             instrument_key: Instrument identifier
-            interval: Time interval (day, 1W, etc.)
-            days: Number of days of history to fetch
-            
+            interval: Time interval (must be one of: 1minute, 30minute, day, week, month)
+            from_date: Start date (YYYY-MM-DD)
+            to_date: End date (YYYY-MM-DD)
+        
         Returns:
             DataFrame with OHLCV data
         """
         try:
-            # Step 1: Check if Upstox client exists and is authenticated
+            # Step 1: Check and initialize Upstox client if needed
             if not hasattr(self, 'upstox_client') or self.upstox_client is None:
                 self.logger.warning("Upstox client not found, attempting to initialize")
                 
@@ -6341,47 +6342,59 @@ class TradingSignalBot:
                 # Set token directly
                 api_client.configuration.access_token = token
                 
-                # Initialize the client and store it
+                # Initialize the client
                 self.upstox_client = api_client
                 self.client = HistoryApi(api_client)
                 
                 self.logger.info("Upstox client initialized with token")
-                    
-            # Step 2: Set up date range
-            to_date = datetime.datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Convert dates to epoch
-            from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
-            to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
+            # Step 2: Set up date range if not provided
+            if to_date is None:
+                to_date = datetime.datetime.now().strftime("%Y-%m-%d")  # Today's date
+                
+            if from_date is None:
+                # Default to 60 days before to_date
+                to_date_obj = datetime.datetime.strptime(to_date, "%Y-%m-%d")
+                from_date = (to_date_obj - datetime.timedelta(days=60)).strftime("%Y-%m-%d")
             
-            # Step 3: Make API request with correct method name and parameters
-            # Important: API Version is required
-            api_version = "v2"  # Required parameter according to the method signature
+            self.logger.info(f"Fetching data for {instrument_key} from {from_date} to {to_date} with interval {interval}")
+            
+            # Step 3: API request with proper method and parameters
+            api_version = "v2"  # Required parameter
             
             try:
-                # Use get_historical_candle_data1 which includes from_date parameter
+                # First attempt: Use get_historical_candle_data1 with both dates
+                self.logger.info(f"Calling get_historical_candle_data1")
                 historical_data = self.client.get_historical_candle_data1(
                     instrument_key=instrument_key,
-                    interval=interval,
-                    to_date=str(to_epoch),
-                    from_date=str(from_epoch),
-                    api_version=api_version  # This was missing in your original code
+                    interval=interval,  # Ensure valid values: 1minute, 30minute, day, week, month
+                    to_date=to_date,    # Use YYYY-MM-DD format, not epoch
+                    from_date=from_date,# Use YYYY-MM-DD format, not epoch
+                    api_version=api_version
                 )
-            except Exception as api_error:
-                self.logger.warning(f"Error with get_historical_candle_data1: {str(api_error)}")
+            except Exception as e:
+                self.logger.warning(f"First attempt failed: {str(e)}")
                 
-                # Fall back to get_historical_candle_data which only uses to_date
                 try:
+                    # Second attempt: Try with just to_date
+                    self.logger.info(f"Falling back to get_historical_candle_data with just to_date")
                     historical_data = self.client.get_historical_candle_data(
                         instrument_key=instrument_key,
                         interval=interval,
-                        to_date=str(to_epoch),
-                        api_version=api_version  # This was missing in your original code
+                        to_date=to_date,
+                        api_version=api_version
                     )
-                except Exception as fallback_error:
-                    self.logger.error(f"Fallback API request failed: {str(fallback_error)}")
-                    raise
+                except Exception as e2:
+                    self.logger.warning(f"Second attempt failed: {str(e2)}")
+                    
+                    # Last resort: Try intraday data
+                    self.logger.info(f"Final attempt with get_intra_day_candle_data")
+                    historical_data = self.client.get_intra_day_candle_data(
+                        instrument_key=instrument_key,
+                        interval="1minute",  # Valid value for intraday
+                        api_version=api_version
+                    )
+                    self.logger.info("Successfully fetched intraday data")
             
             # Step 4: Extract candle data
             if isinstance(historical_data, dict):
@@ -6398,23 +6411,28 @@ class TradingSignalBot:
                 else:
                     self.logger.error(f"Unexpected response type: {type(historical_data)}")
                     return None
-                    
+            
             # Step 5: Create DataFrame
+            if not candles or len(candles) == 0:
+                self.logger.warning(f"No candle data found for {instrument_key}")
+                return None
+                
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
             
             # Convert columns to numeric types
             for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col])
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col])
                     
             self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
             return df
-                    
+                
         except Exception as e:
             self.logger.error(f"Error fetching historical data: {str(e)}")
             raise APIConnectionError(f"Failed to fetch historical data: {str(e)}")
-    
+        
     async def generate_signals(self, instrument_key):
         """
         Generate trading signals for a given instrument
