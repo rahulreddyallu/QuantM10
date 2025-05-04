@@ -6251,10 +6251,9 @@ class TradingSignalBot:
             if not hasattr(self, 'upstox_client') or self.upstox_client is None:
                 self.logger.warning("Upstox client not found, attempting to initialize")
                 
-                # Initialize client
+                # Initialize client with correct imports
                 from upstox_client.api_client import ApiClient
-                from upstox_client.api.login_api import LoginApi
-                from upstox_client.api.market_quote_api import MarketQuoteApi
+                from upstox_client.api.history_api import HistoryApi
                 
                 api_client = ApiClient()
                 
@@ -6268,10 +6267,10 @@ class TradingSignalBot:
                 
                 # Initialize the client and store it
                 self.upstox_client = api_client
-                self.client = HistoryApi(api_client)  # For historical data
+                self.client = HistoryApi(api_client)
                 
                 self.logger.info("Upstox client initialized with token")
-                
+                    
             # Step 2: Set up date range
             to_date = datetime.datetime.now().strftime("%Y-%m-%d")
             from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
@@ -6280,30 +6279,50 @@ class TradingSignalBot:
             from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
             to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
             
-            # Step 3: Make API request
+            # Step 3: Make API request with correct method name and parameters
+            # Important: API Version is required
+            api_version = "v2"  # Required parameter according to the method signature
+            
             try:
-                historical_data = self.client.historical_candle_data(
+                # Use get_historical_candle_data1 which includes from_date parameter
+                historical_data = self.client.get_historical_candle_data1(
                     instrument_key=instrument_key,
                     interval=interval,
-                    to_date=to_epoch,
-                    from_date=from_epoch
+                    to_date=str(to_epoch),
+                    from_date=str(from_epoch),
+                    api_version=api_version  # This was missing in your original code
                 )
-            except AttributeError:
-                # Try alternative method name that might exist in different API versions
-                historical_data = self.client.get_candle_data(
-                    instrument_key=instrument_key,
-                    interval=interval,
-                    to_date=to_epoch,
-                    from_date=from_epoch
-                )
+            except Exception as api_error:
+                self.logger.warning(f"Error with get_historical_candle_data1: {str(api_error)}")
+                
+                # Fall back to get_historical_candle_data which only uses to_date
+                try:
+                    historical_data = self.client.get_historical_candle_data(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        to_date=str(to_epoch),
+                        api_version=api_version  # This was missing in your original code
+                    )
+                except Exception as fallback_error:
+                    self.logger.error(f"Fallback API request failed: {str(fallback_error)}")
+                    raise
             
             # Step 4: Extract candle data
-            if 'data' not in historical_data or 'candles' not in historical_data['data']:
-                self.logger.error(f"Unexpected response format: {historical_data}")
-                return None
-                
-            candles = historical_data['data']['candles']
-            
+            if isinstance(historical_data, dict):
+                if 'data' in historical_data and 'candles' in historical_data['data']:
+                    candles = historical_data['data']['candles']
+                else:
+                    self.logger.error(f"Unexpected response format: {historical_data}")
+                    return None
+            else:
+                # Handle object response (if SDK returns objects instead of dicts)
+                data_attr = getattr(historical_data, 'data', None)
+                if data_attr and hasattr(data_attr, 'candles'):
+                    candles = data_attr.candles
+                else:
+                    self.logger.error(f"Unexpected response type: {type(historical_data)}")
+                    return None
+                    
             # Step 5: Create DataFrame
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
@@ -6312,10 +6331,10 @@ class TradingSignalBot:
             # Convert columns to numeric types
             for col in ['open', 'high', 'low', 'close', 'volume']:
                 df[col] = pd.to_numeric(df[col])
-                
+                    
             self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
             return df
-                
+                    
         except Exception as e:
             self.logger.error(f"Error fetching historical data: {str(e)}")
             raise APIConnectionError(f"Failed to fetch historical data: {str(e)}")
