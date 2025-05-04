@@ -5121,28 +5121,33 @@ class TechnicalIndicators:
         # Generate summary of key indicators
         key_indicators = []
         
-        # Add trend indicators
+        # Add trend indicators - FIXED with safe dictionary access
         if 'moving_averages' in self.indicators:
             ma = self.indicators['moving_averages']
-            if ma['values'].get('uptrend', False):
+            # Safely access nested keys with defaults
+            ma_values = ma.get('values', {})
+            if ma_values.get('uptrend', False):
                 key_indicators.append("Bullish Trend on Moving Averages")
-            elif ma['values'].get('downtrend', False):
+            elif ma_values.get('downtrend', False):
                 key_indicators.append("Bearish Trend on Moving Averages")
         
-        # Add momentum indicators
+        # Add momentum indicators - FIXED with safe dictionary access
         if 'rsi' in self.indicators:
             rsi = self.indicators['rsi']
-            rsi_value = rsi['values'].get('rsi')
+            rsi_values = rsi.get('values', {})
+            rsi_value = rsi_values.get('rsi')
             if rsi_value:
                 if rsi_value < 30:
                     key_indicators.append(f"RSI Oversold ({rsi_value})")
                 elif rsi_value > 70:
                     key_indicators.append(f"RSI Overbought ({rsi_value})")
         
-        # Add other key indicators
+        # Add other key indicators - FIXED with safe dictionary access
         if 'supertrend' in self.indicators:
             st = self.indicators['supertrend']
-            key_indicators.append(f"Supertrend: {st['values'].get('direction', 'Unknown')}")
+            st_values = st.get('values', {})
+            st_direction = st_values.get('direction', 'Unknown')
+            key_indicators.append(f"Supertrend: {st_direction}")
         
         # Format summary
         if key_indicators:
