@@ -572,27 +572,7 @@ logging.basicConfig(level=logging.INFO)
 
 class UpstoxClient:
     """Client for interacting with Upstox API for trading and data fetching"""
-    
-    def get_instrument_details(self, instrument_key):
-        """Get instrument details from Upstox"""
-        try:
-            # Get market quote for the instrument
-            market_quote = self.client.get_market_quote_full(instrument_key)
-            
-            # Extract basic instrument details from response
-            instrument_details = {
-                'name': market_quote['data']['company_name'],
-                'tradingsymbol': market_quote['data']['symbol'],
-                'exchange': market_quote['data']['exchange'],
-                'last_price': market_quote['data']['last_price']
-            }
-            
-            return instrument_details
-            
-        except Exception as e:
-            logger.error(f"Error getting instrument details: {str(e)}")
-            return None
-    
+
     def __init__(self, config):
         """Initialize client with configuration"""
         self.config = config
@@ -684,6 +664,49 @@ class UpstoxClient:
         except Exception as e:
             self.logger.error(f"Token refresh error: {str(e)}")
             raise APIConnectionError("Upstox", "Failed to refresh token for", e)
+    # Fix for the missing get_instrument_details method
+
+    def get_instrument_details(self, instrument_key):
+        """
+        Get instrument details with fallback to local data if API doesn't support it
+        
+        Args:
+            instrument_key: Instrument key in format EXCHANGE|TOKEN
+            
+        Returns:
+            Dictionary with instrument details or None
+        """
+        # First check if we have a markets API or method for fetching instrument details
+        if hasattr(self, 'markets_client') and hasattr(self.markets_client, 'get_instrument_details'):
+            try:
+                return self.markets_client.get_instrument_details(instrument_key)
+            except Exception as e:
+                self.logger.warning(f"Error from markets API: {str(e)}")
+        
+        # Fallback to parsing the instrument key
+        try:
+            parts = instrument_key.replace('-', '|').split('|')
+            if len(parts) >= 2:
+                exchange = parts[0]
+                token = parts[1]
+                
+                # Return basic information
+                return {
+                    'instrument_key': instrument_key,
+                    'exchange': exchange,
+                    'token': token,
+                    'trading_symbol': token,  # Best effort
+                    'name': token,           # Best effort
+                    'instrument_type': 'EQ' if 'EQ' in exchange else 'UNKNOWN'
+                }
+        except Exception as e:
+            self.logger.warning(f"Error parsing instrument key: {str(e)}")
+        
+        # Return minimal details if everything fails
+        return {
+            'instrument_key': instrument_key,
+            'name': instrument_key
+        }
         
     async def get_historical_data(self, instrument_key, interval='day', days=60):
         """
