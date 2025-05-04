@@ -684,126 +684,119 @@ class UpstoxClient:
         except Exception as e:
             self.logger.error(f"Token refresh error: {str(e)}")
             raise APIConnectionError("Upstox", "Failed to refresh token for", e)
-    
-    async def get_historical_data(self, instrument_key, interval="day", days=60):
+        
+    async def get_historical_data(self, instrument_key, interval='day', days=60):
         """
-        Fetch historical OHLCV data from Upstox
+        Fetch historical data with robust error handling and retries
         
         Args:
-            instrument_key: Instrument identifier
-            interval: Time interval (one of: 1minute, 30minute, day, week, month)
+            instrument_key: Instrument key in format EXCHANGE|TOKEN or EXCHANGE-TOKEN
+            interval: Candle interval (day, 1minute, etc.)
             days: Number of days of history to fetch
             
         Returns:
-            DataFrame with OHLCV data
+            DataFrame with OHLCV data or empty DataFrame if fetch fails
         """
-        try:
-            # Step 1: Check if Upstox client exists and is authenticated
-            if not hasattr(self, 'upstox_client') or self.upstox_client is None:
-                self.logger.warning("Upstox client not found, attempting to initialize")
-                
-                # Initialize client with correct imports
-                from upstox_client.api_client import ApiClient
-                from upstox_client.api.history_api import HistoryApi
-                
-                api_client = ApiClient()
-                
-                # Get token from config 
-                token = self.config.get('UPSTOX_CODE')
-                if not token:
-                    raise APIConnectionError("Upstox access token not found in configuration")
-                
-                # Set token directly
-                api_client.configuration.access_token = token
-                
-                # Initialize the client and store it
-                self.upstox_client = api_client
-                self.client = HistoryApi(api_client)
-                
-                self.logger.info("Upstox client initialized with token")
-                    
-            # Step 2: Set up date range in YYYY-MM-DD format (NOT epoch timestamps)
-            current_date = datetime.datetime.now()
-            to_date = current_date.strftime("%Y-%m-%d")
-            from_date = (current_date - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
-            
-            self.logger.info(f"Fetching data from {from_date} to {to_date} for {instrument_key}")
-            
-            # Set API version required by all methods
-            api_version = "v2"
-            
-            # Try different methods of the API in sequence
-            try:
-                # Method 1: Try intraday data first (simplest approach)
-                self.logger.info(f"Trying intraday data for {instrument_key}")
-                historical_data = self.client.get_intra_day_candle_data(
-                    instrument_key=instrument_key,
-                    interval="1minute",  # Valid for intraday
-                    api_version=api_version
-                )
-                self.logger.info("Successfully fetched intraday data")
-            except Exception as e1:
-                self.logger.warning(f"Intraday data fetch failed: {str(e1)}")
-                
+        max_retries = 3
+        retry_delay = 2  # seconds
+        
+        # Calculate date range
+        to_date = datetime.now().strftime('%Y-%m-%d')
+        from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+        
+        self.logger.info(f"Fetching data for {instrument_key} from {from_date} to {to_date} with interval {interval}")
+        
+        # Try different key formats - Upstox can be particular about format
+        key_formats = [
+            instrument_key,  # Original format
+            instrument_key.replace('|', '-') if '|' in instrument_key else instrument_key,  # Replace pipe with dash
+            instrument_key.replace('-', '|') if '-' in instrument_key else instrument_key   # Replace dash with pipe
+        ]
+        
+        # Remove duplicates from formats
+        key_formats = list(set(key_formats))
+        
+        # Try each format with multiple retries
+        for attempt in range(max_retries):
+            for key_format in key_formats:
                 try:
-                    # Method 2: Try just using to_date (without from_date)
-                    self.logger.info(f"Trying historical data with just to_date={to_date}")
-                    historical_data = self.client.get_historical_candle_data(
-                        instrument_key=instrument_key,
-                        interval=interval,
-                        to_date=to_date,  # Pass date as string in YYYY-MM-DD format
-                        api_version=api_version
-                    )
-                    self.logger.info("Successfully fetched historical data with to_date only")
-                except Exception as e2:
-                    self.logger.warning(f"Historical data with to_date failed: {str(e2)}")
+                    # Add delay between retries
+                    if attempt > 0:
+                        self.logger.info(f"Retry {attempt} for {key_format}...")
+                        await asyncio.sleep(retry_delay * attempt)
                     
-                    # Method 3: Last attempt with both dates
-                    self.logger.info(f"Trying full historical range from {from_date} to {to_date}")
+                    self.logger.info(f"Calling get_historical_candle_data1 with key {key_format}")
+                    
+                    # Make sure API version is set
+                    api_version = getattr(self, 'api_version', '2.0')
+                    
+                    # Call the Upstox API
                     historical_data = self.client.get_historical_candle_data1(
-                        instrument_key=instrument_key,
+                        instrument_key=key_format,
                         interval=interval,
-                        to_date=to_date,      # String format YYYY-MM-DD
-                        from_date=from_date,  # String format YYYY-MM-DD
+                        to_date=to_date,
+                        from_date=from_date,
                         api_version=api_version
                     )
-                    self.logger.info("Successfully fetched full historical range")
-            
-            # Step 4: Extract candle data from response
-            if isinstance(historical_data, dict):
-                if 'data' in historical_data and 'candles' in historical_data['data']:
-                    candles = historical_data['data']['candles']
-                else:
-                    self.logger.error(f"Unexpected response format: {historical_data}")
-                    return None
-            else:
-                # Handle object response (if SDK returns objects instead of dicts)
-                data_attr = getattr(historical_data, 'data', None)
-                if data_attr and hasattr(data_attr, 'candles'):
-                    candles = data_attr.candles
-                else:
-                    self.logger.error(f"Unexpected response type: {type(historical_data)}")
-                    return None
                     
-            # Step 5: Create DataFrame
-            if not candles or len(candles) == 0:
-                self.logger.warning(f"No candle data found for {instrument_key}")
-                return None
+                    # Check if we got valid data
+                    if historical_data and isinstance(historical_data, dict) and 'data' in historical_data:
+                        data = historical_data.get('data', {})
+                        candles = data.get('candles', [])
+                        
+                        if not candles:
+                            self.logger.warning(f"No candle data returned for {key_format}")
+                            continue
+                        
+                        self.logger.info(f"Successfully fetched {len(candles)} candles for {key_format}")
+                        
+                        # Convert to DataFrame
+                        df = pd.DataFrame(candles)
+                        
+                        # Process columns based on actual data structure
+                        if len(df.columns) >= 5:
+                            # Rename columns to standard OHLCV format if needed
+                            if len(df.columns) >= 6:
+                                df.columns = ['datetime', 'open', 'high', 'low', 'close', 'volume']
+                            else:
+                                df.columns = ['datetime', 'open', 'high', 'low', 'close']
+                            
+                            # Convert timestamp to datetime and set as index
+                            df['datetime'] = pd.to_datetime(df['datetime'])
+                            df.set_index('datetime', inplace=True)
+                            
+                            # Convert price columns to float
+                            for col in df.columns:
+                                if col != 'datetime':
+                                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                            
+                            return df
+                        else:
+                            self.logger.warning(f"Unexpected data format: {df.columns}")
+                    else:
+                        self.logger.warning(f"Invalid response format: {historical_data}")
                 
-            df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
-            df.set_index('timestamp', inplace=True)
-            
-            # Convert columns to numeric types
-            for col in ['open', 'high', 'low', 'close', 'volume']:
-                df[col] = pd.to_numeric(df[col])
+                except Exception as e:
+                    error_message = str(e)
+                    self.logger.warning(f"Error fetching data for {key_format}: {error_message}")
                     
-            self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
-            return df
-                    
-        except Exception as e:
-            self.logger.error(f"Error fetching historical data: {str(e)}")
-            raise APIConnectionError(f"Failed to fetch historical data: {str(e)}")
+                    # Check for specific error types
+                    if "Unauthorized" in error_message or "401" in error_message:
+                        self.logger.error("Authentication error - check API credentials")
+                    elif "429" in error_message or "rate limit" in error_message.lower():
+                        self.logger.warning("Rate limit exceeded, waiting longer...")
+                        await asyncio.sleep(5 * (attempt + 1))  # Increasing backoff
+                    elif "invalid instrument" in error_message.lower():
+                        self.logger.warning(f"Invalid instrument key format: {key_format}")
+                        # Continue to try other formats
+                    else:
+                        self.logger.error(f"Unexpected error: {traceback.format_exc()}")
+        
+        # All retries and formats failed
+        self.logger.error(f"Failed to retrieve data for {instrument_key} after all attempts")
+        
+        # Return empty DataFrame with expected columns
+        return pd.DataFrame(columns=['open', 'high', 'low', 'close', 'volume'])
 
     def get_instrument_details(self, instrument_key):
         """Get instrument details from Upstox"""
