@@ -590,49 +590,117 @@ class UpstoxClient:
             self.logger.error(f"Token refresh error: {str(e)}")
             raise APIConnectionError("Upstox", "Failed to refresh token for", e)
     
-    def get_historical_data(self, instrument_key, interval, from_date, to_date):
+    async def get_historical_data(self, instrument_key, interval="day", days=60):
         """
-        Get historical OHLCV data from Upstox
+        Fetch historical OHLCV data from Upstox
         
         Args:
             instrument_key: Instrument identifier
-            interval: Time interval (day, 1W, etc.)
-            from_date: Start date (YYYY-MM-DD)
-            to_date: End date (YYYY-MM-DD)
-        
+            interval: Time interval (one of: 1minute, 30minute, day, week, month)
+            days: Number of days of history to fetch
+            
         Returns:
             DataFrame with OHLCV data
         """
         try:
-            # Convert dates to epoch
-            from_epoch = int(time.mktime(datetime.datetime.strptime(from_date, "%Y-%m-%d").timetuple()))
-            to_epoch = int(time.mktime(datetime.datetime.strptime(to_date, "%Y-%m-%d").timetuple()))
+            # Step 1: Check if Upstox client exists and is authenticated
+            if not hasattr(self, 'upstox_client') or self.upstox_client is None:
+                self.logger.warning("Upstox client not found, attempting to initialize")
+                
+                # Initialize client with correct imports
+                from upstox_client.api_client import ApiClient
+                from upstox_client.api.history_api import HistoryApi
+                
+                api_client = ApiClient()
+                
+                # Get token from config 
+                token = self.config.get('UPSTOX_CODE')
+                if not token:
+                    raise APIConnectionError("Upstox access token not found in configuration")
+                
+                # Set token directly
+                api_client.configuration.access_token = token
+                
+                # Initialize the client and store it
+                self.upstox_client = api_client
+                self.client = HistoryApi(api_client)
+                
+                self.logger.info("Upstox client initialized with token")
+                    
+            # Step 2: Set up date range in YYYY-MM-DD format
+            to_date = datetime.datetime.now().strftime("%Y-%m-%d")
+            from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Make API request
-            historical_data = self.client.historical_candle_data(
-                instrument_key=instrument_key,
-                interval=interval,
-                to_date=to_epoch,
-                from_date=from_epoch
-            )
+            # Step 3: Make API request with correct parameters and format
+            api_version = "v2"  # Required parameter according to the method signature
             
-            # Extract candle data
-            candles = historical_data['data']['candles']
+            # First attempt: Use intraday data (simpler and often more reliable)
+            try:
+                self.logger.info(f"Attempting to fetch intraday candle data for {instrument_key}")
+                historical_data = self.client.get_intra_day_candle_data(
+                    instrument_key=instrument_key,
+                    interval="1minute",  # For intraday, use 1minute which is usually available
+                    api_version=api_version
+                )
+                self.logger.info("Successfully fetched intraday data")
+            except Exception as intraday_error:
+                self.logger.warning(f"Intraday data fetch failed: {str(intraday_error)}")
+                
+                # Second attempt: Try with both to_date and from_date
+                try:
+                    self.logger.info(f"Attempting historical data with from and to dates: {from_date} to {to_date}")
+                    historical_data = self.client.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval="day",  # Valid values: 1minute, 30minute, day, week, month
+                        to_date=to_date,  # Use YYYY-MM-DD string format
+                        from_date=from_date,  # Use YYYY-MM-DD string format
+                        api_version=api_version
+                    )
+                    self.logger.info("Successfully fetched historical data with from/to dates")
+                except Exception as historical_error:
+                    self.logger.warning(f"Historical data with from/to failed: {str(historical_error)}")
+                    
+                    # Last attempt: Just use to_date
+                    self.logger.info(f"Attempting historical data with just to_date: {to_date}")
+                    historical_data = self.client.get_historical_candle_data(
+                        instrument_key=instrument_key,
+                        interval="day",  # Valid values: 1minute, 30minute, day, week, month
+                        to_date=to_date,  # Use YYYY-MM-DD string format
+                        api_version=api_version
+                    )
+                    self.logger.info("Successfully fetched historical data with to_date only")
             
-            # Create DataFrame
+            # Step 4: Extract candle data
+            if isinstance(historical_data, dict):
+                if 'data' in historical_data and 'candles' in historical_data['data']:
+                    candles = historical_data['data']['candles']
+                else:
+                    self.logger.error(f"Unexpected response format: {historical_data}")
+                    return None
+            else:
+                # Handle object response (if SDK returns objects instead of dicts)
+                data_attr = getattr(historical_data, 'data', None)
+                if data_attr and hasattr(data_attr, 'candles'):
+                    candles = data_attr.candles
+                else:
+                    self.logger.error(f"Unexpected response type: {type(historical_data)}")
+                    return None
+                    
+            # Step 5: Create DataFrame
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
             
-            # Check if data is empty
-            if len(df) == 0:
-                raise EmptyDataError(instrument_key)
-                
+            # Convert columns to numeric types
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+                    
+            self.logger.info(f"Successfully fetched {len(df)} candles for {instrument_key}")
             return df
-            
+                    
         except Exception as e:
-            self.logger.error(f"Error getting historical data: {str(e)}")
-            raise DataFetchError(instrument_key, "Failed to fetch historical data", e)
+            self.logger.error(f"Error fetching historical data: {str(e)}")
+            raise APIConnectionError(f"Failed to fetch historical data: {str(e)}")
 
     def get_instrument_details(self, instrument_key):
         """Get instrument details from Upstox"""
