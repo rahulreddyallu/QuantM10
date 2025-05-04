@@ -1922,21 +1922,44 @@ class TechnicalIndicators:
             df: DataFrame with OHLCV data (index=timestamp, columns=[open, high, low, close, volume])
             params: Optional TradingParameters instance for indicator parameters
         """
-        # Ensure column names are lowercase
+        # Make a deep copy to avoid modifying original
         self.df = df.copy()
-        self.df.columns = [col.lower() for col in self.df.columns]
         
-        # Ensure we have the required columns
+        # Debug: Print original column names
+        self.logger = logging.getLogger(__name__)
+        self.logger.info(f"Original columns: {df.columns.tolist()}")
+        
+        # Handle case issues with columns - be more flexible with capitalization
+        col_mapping = {}
+        for col in self.df.columns:
+            col_mapping[col.lower().strip()] = col
+        
+        # Standardize required column names
         required_columns = ['open', 'high', 'low', 'close', 'volume']
-        missing_columns = [col for col in required_columns if col not in self.df.columns]
+        missing_columns = []
         
+        for req_col in required_columns:
+            if req_col in col_mapping:
+                # Column exists but might have different case - standardize it
+                if col_mapping[req_col] != req_col:
+                    self.df[req_col] = self.df[col_mapping[req_col]]
+            else:
+                missing_columns.append(req_col)
+        
+        # Handle missing volume separately
         if 'volume' in missing_columns:
-            # If volume is missing, create placeholder volume data
             self.df['volume'] = 0
             missing_columns.remove('volume')
         
         if missing_columns:
+            # Critical error - raise with informative message
+            self.logger.error(f"Missing required columns: {missing_columns}. Available columns: {df.columns.tolist()}")
             raise ValueError(f"DataFrame must contain the following columns: {missing_columns}")
+        
+        # Ensure all required columns are present with correct case
+        for col in required_columns:
+            if col not in self.df.columns:
+                self.logger.error(f"Column '{col}' not found after standardization!")
         
         # Set parameters from config or use defaults
         self.params = params or TradingParameters()
@@ -1944,7 +1967,6 @@ class TechnicalIndicators:
         # Initialize results dictionary and signals list
         self.indicators = {}
         self.signals = []
-        self.logger = logging.getLogger(__name__)
     
     def calculate_all(self):
         """Calculate all technical indicators"""
