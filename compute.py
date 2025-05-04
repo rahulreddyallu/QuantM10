@@ -627,50 +627,54 @@ class UpstoxClient:
                 
                 self.logger.info("Upstox client initialized with token")
                     
-            # Step 2: Set up date range in YYYY-MM-DD format
-            to_date = datetime.datetime.now().strftime("%Y-%m-%d")
-            from_date = (datetime.datetime.now() - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
+            # Step 2: Set up date range in YYYY-MM-DD format (NOT epoch timestamps)
+            current_date = datetime.datetime.now()
+            to_date = current_date.strftime("%Y-%m-%d")
+            from_date = (current_date - datetime.timedelta(days=days)).strftime("%Y-%m-%d")
             
-            # Step 3: Make API request with correct parameters and format
-            api_version = "v2"  # Required parameter according to the method signature
+            self.logger.info(f"Fetching data from {from_date} to {to_date} for {instrument_key}")
             
-            # First attempt: Use intraday data (simpler and often more reliable)
+            # Set API version required by all methods
+            api_version = "v2"
+            
+            # Try different methods of the API in sequence
             try:
-                self.logger.info(f"Attempting to fetch intraday candle data for {instrument_key}")
+                # Method 1: Try intraday data first (simplest approach)
+                self.logger.info(f"Trying intraday data for {instrument_key}")
                 historical_data = self.client.get_intra_day_candle_data(
                     instrument_key=instrument_key,
-                    interval="1minute",  # For intraday, use 1minute which is usually available
+                    interval="1minute",  # Valid for intraday
                     api_version=api_version
                 )
                 self.logger.info("Successfully fetched intraday data")
-            except Exception as intraday_error:
-                self.logger.warning(f"Intraday data fetch failed: {str(intraday_error)}")
+            except Exception as e1:
+                self.logger.warning(f"Intraday data fetch failed: {str(e1)}")
                 
-                # Second attempt: Try with both to_date and from_date
                 try:
-                    self.logger.info(f"Attempting historical data with from and to dates: {from_date} to {to_date}")
-                    historical_data = self.client.get_historical_candle_data1(
-                        instrument_key=instrument_key,
-                        interval="day",  # Valid values: 1minute, 30minute, day, week, month
-                        to_date=to_date,  # Use YYYY-MM-DD string format
-                        from_date=from_date,  # Use YYYY-MM-DD string format
-                        api_version=api_version
-                    )
-                    self.logger.info("Successfully fetched historical data with from/to dates")
-                except Exception as historical_error:
-                    self.logger.warning(f"Historical data with from/to failed: {str(historical_error)}")
-                    
-                    # Last attempt: Just use to_date
-                    self.logger.info(f"Attempting historical data with just to_date: {to_date}")
+                    # Method 2: Try just using to_date (without from_date)
+                    self.logger.info(f"Trying historical data with just to_date={to_date}")
                     historical_data = self.client.get_historical_candle_data(
                         instrument_key=instrument_key,
-                        interval="day",  # Valid values: 1minute, 30minute, day, week, month
-                        to_date=to_date,  # Use YYYY-MM-DD string format
+                        interval=interval,
+                        to_date=to_date,  # Pass date as string in YYYY-MM-DD format
                         api_version=api_version
                     )
                     self.logger.info("Successfully fetched historical data with to_date only")
+                except Exception as e2:
+                    self.logger.warning(f"Historical data with to_date failed: {str(e2)}")
+                    
+                    # Method 3: Last attempt with both dates
+                    self.logger.info(f"Trying full historical range from {from_date} to {to_date}")
+                    historical_data = self.client.get_historical_candle_data1(
+                        instrument_key=instrument_key,
+                        interval=interval,
+                        to_date=to_date,      # String format YYYY-MM-DD
+                        from_date=from_date,  # String format YYYY-MM-DD
+                        api_version=api_version
+                    )
+                    self.logger.info("Successfully fetched full historical range")
             
-            # Step 4: Extract candle data
+            # Step 4: Extract candle data from response
             if isinstance(historical_data, dict):
                 if 'data' in historical_data and 'candles' in historical_data['data']:
                     candles = historical_data['data']['candles']
@@ -687,6 +691,10 @@ class UpstoxClient:
                     return None
                     
             # Step 5: Create DataFrame
+            if not candles or len(candles) == 0:
+                self.logger.warning(f"No candle data found for {instrument_key}")
+                return None
+                
             df = pd.DataFrame(candles, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
             df.set_index('timestamp', inplace=True)
