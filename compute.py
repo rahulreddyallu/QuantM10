@@ -572,16 +572,44 @@ logging.basicConfig(level=logging.INFO)
 class UpstoxClient:
     """Client for interacting with Upstox API for trading and data fetching"""
     
+    def get_instrument_details(self, instrument_key):
+        """Get instrument details from Upstox"""
+        try:
+            # Get market quote for the instrument
+            market_quote = self.client.get_market_quote_full(instrument_key)
+            
+            # Extract basic instrument details from response
+            instrument_details = {
+                'name': market_quote['data']['company_name'],
+                'tradingsymbol': market_quote['data']['symbol'],
+                'exchange': market_quote['data']['exchange'],
+                'last_price': market_quote['data']['last_price']
+            }
+            
+            return instrument_details
+            
+        except Exception as e:
+            logger.error(f"Error getting instrument details: {str(e)}")
+            return None
+    
     def __init__(self, config):
-        """Initialize Upstox client with API credentials"""
+        """Initialize client with configuration"""
         self.config = config
-        self.logger = logging.getLogger("TradingBot.UpstoxClient")
-        self.api_key = config.UPSTOX_API_KEY
-        self.api_secret = config.UPSTOX_API_SECRET
-        self.redirect_uri = config.UPSTOX_REDIRECT_URI
-        self.code = config.UPSTOX_CODE
-        self.access_token = None
-        self.client = None
+        try:
+            # Use dictionary access for config values
+            self.api_key = self.config.get("UPSTOX_API_KEY")
+            self.api_secret = self.config.get("UPSTOX_API_SECRET")
+            self.redirect_uri = self.config.get("UPSTOX_REDIRECT_URI")
+            self.code = self.config.get("UPSTOX_CODE")
+            
+            # Initialize the client
+            if self.code:
+                self.client = UpstoxClient.authenticate(self.api_key, self.api_secret, self.redirect_uri, self.code)
+                logger.info("Upstox client initialized with token")
+            else:
+                logger.warning("No authentication code found in config")
+        except Exception as e:
+            logger.error(f"Error initializing Upstox client: {str(e)}")
         
     def authenticate(self):
         """Authenticate with Upstox API"""
