@@ -2,7 +2,6 @@
 
 ![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.9+-green.svg)
-![License](https://img.shields.io/badge/license-MIT-yellow.svg)
 
 An advanced algorithmic trading system with comprehensive technical analysis capabilities, pattern recognition, and systematic backtesting. QuantM10 analyzes market data using multiple indicators, detects chart patterns, generates trading signals, and provides detailed performance metrics through rigorous backtesting.
 
